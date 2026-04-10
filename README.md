@@ -24,10 +24,9 @@ nutrition5k_dataset
         side_angles_FILTERED  [if you have already ran the filtering script]
         ...
 metadata
-  ↳ Training_Nutrition5k
-      ↳ usa_corr
-        ita_corr
-        ...
+  ↳ usa_corr
+    ita_corr
+    ...
 ```
 
 ### Environment
