@@ -1,4 +1,4 @@
-# DL-for-food-images
+# Supporting code for "An Integrated Deep Learning Framework for Ingredient Recognition and Nutritional Composition Prediction from Nutrition5k 2D Images"
 
 ## Data
 
