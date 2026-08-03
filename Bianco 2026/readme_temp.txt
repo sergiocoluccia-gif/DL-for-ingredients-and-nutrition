@@ -8,7 +8,9 @@ Per far girare il codice è necessario SEMPRE:
 
 2) trascrivere il percorso del main nello script in riga 42, ad esempio: wd_main = "C:/Users/Windows10/Desktop/work/reportino3/"
 
-3) per ottenere i file di output (tabelle, figure, dati) impostare il parametro "doouts" (riga 71) ad 1
+3) scaricare dal link presente nel file txt "link to input files" i file di input necessari per ottenere gli output del lavoro
+
+4) per ottenere i file di output (tabelle, figure, dati) impostare il parametro "doouts" (riga 71) ad 1
 
 
 File di input
