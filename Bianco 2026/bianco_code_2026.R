@@ -3508,7 +3508,7 @@ for (m in levels(data_ingr_performance_list$dataset)) {
     par( mar = c(0, 0, 0, 0) )
     
     ggsave2(
-      filename = paste0("./figures/Supfig_s", 12 + t, "_ingr-performances.pdf"),
+      filename = paste0("./figures/Fig_s", 12 + t, "_ingr-performances.pdf"),
       plot = q,
       width = 29.7, height = 17,
       scale = 2,
@@ -3546,7 +3546,7 @@ if(doouts == 9999){
   par( mar = c(0, 0, 0, 0) )
   
   ggsave2(
-    filename = paste0("./figures/Supfig_X_ingr_performances.pdf"),
+    filename = paste0("./figures/Fig_s_X_ingr_performances.pdf"),
     plot = p,
     width = 30, height = 20,
     scale = 1.5,
@@ -3747,7 +3747,7 @@ if(doouts == 9999){
   par( mar = c(0, 0, 0, 0) )
   
   ggsave2(
-    filename = paste0("./figures/Supfig_X_ex8_ingr_performances.pdf"),
+    filename = paste0("./figures/Fig_s_X_ex8_ingr_performances.pdf"),
     plot = q,
     width = 20, height = 14,
     scale = 2,
@@ -4569,7 +4569,7 @@ table_target_dishes <-
 if(doouts == 9999){
   
   cat("...printing support table of MAPE difference between the current pubblication vs Bianco et al., 2025 for a subset of dishes...\n")
-  save_as_docx(table_target_dishes, path = paste0("./support_data/tableX_reportino2_3_before.docx"))  
+  save_as_docx(table_target_dishes, path = paste0("./support_data/Table_X_reportino2_3_before.docx"))  
   
 }
 
@@ -4651,7 +4651,7 @@ df_fin_reportino2.3_before_d_nae_pct <-
     cat("...printing figure S16 of kernel density...\n")
     
     ggsave2(
-      filename = paste0("./figures/Supfig_s16_kernel_overall.pdf"),
+      filename = paste0("./figures/Fig_s16_kernel_overall.pdf"),
       plot = q,
       width = 8, height = 5,
       scale = 2,
@@ -4754,7 +4754,7 @@ df_fin_reportino2.3_before_d_nae_pct <-
     cat("...printing figure S17 of kernel density...\n")
     
     ggsave2(
-      filename = paste0("./figures/Supfig_s17_kernel_dataset.pdf"),
+      filename = paste0("./figures/Fig_s17_kernel_dataset.pdf"),
       plot = q,
       width = 8, height = 5,
       scale = 2.,
@@ -4857,7 +4857,7 @@ df_fin_reportino2.3_before_d_nae_pct <-
     cat("...printing figure S18 of kernel density...\n")
     
     ggsave2(
-      filename = paste0("./figures/Supfig_s18_kernel_model.pdf"),
+      filename = paste0("./figures/Fig_s18_kernel_model.pdf"),
       plot = q,
       width = 8, height = 5,
       scale = 2.,
@@ -5132,7 +5132,7 @@ if(doouts == 1){
   par(mar = c(0, 0, 0, 0))
   
   ggsave2(
-    filename = paste0("./figures/Supfig_s15_performances-scenarios.pdf"),
+    filename = paste0("./figures/Fig_s15_performances-scenarios.pdf"),
     plot = p,
     width = 14, height = 20,
     scale = 2.,
@@ -5295,7 +5295,7 @@ tabella_MAE_pct_scenarios <- tabella
 if(doouts == 9999){
   
   cat("...printing support table of MAPE and Delta MAPE distribution over scenarios...\n")
-  save_as_docx(tabella_MAE_pct_scenarios, path = "table_MAE-pct_scenarios.docx")
+  save_as_docx(tabella_MAE_pct_scenarios, path = "TableMAE-pct_scenarios.docx")
   
 }
 
