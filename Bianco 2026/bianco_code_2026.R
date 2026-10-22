@@ -1,9 +1,11 @@
-# Reportino 3
-# last update: 2/12/2025
+# Provisorial: An Integrated Deep Learning Framework for Ingredient Recognition and Nutritional Composition Prediction from Nutrition5k 2D Images
 
-options(java.parameters = "-Xmx8000m")
+# last update: 22/10/2026
+
 
 #### Packages, functions and default operations ####
+
+options(java.parameters = "-Xmx8000m")
 
 # libraries to open files
 library(openxlsx)
@@ -11,6 +13,7 @@ library(openxlsx)
 # libraries for data manipulation
 library(janitor)
 library(stringr)
+library(crayon)
 library(dplyr)
 library(tidyr)
 library(glue)
@@ -41,7 +44,7 @@ library(flextable)
 library(purrr)
 
 
-wd_main = "C:/Users/sergio.coluccia/Desktop/reportino3"
+wd_main = "C:/Users/ASUS/Desktop/Milano/reportino3"
 
 # work directory
 setwd(wd_main)
@@ -51,6 +54,16 @@ wd_input_data = "input_data"
 
 # where output data will be generated
 wd_output_data = "output_data"
+
+
+print_packages <- data.frame(installed.packages())
+
+rbind(print_packages[ print_packages$Package %in% gsub("package:", "", search()[grep("package:", search())]), c("Package", "License", "Built")] %>% arrange,
+      c("R-version", paste0(rep("-", times = 20), collapse = ""), paste(R.version[c("major", "minor")], collapse = "."))
+      ) %>%
+flextable %>% autofit %>% save_as_docx(path = paste(".", wd_output_data, "Table_packages.docx", sep = "/"))
+
+
 
 ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ##
 
@@ -75,11 +88,12 @@ cartels <- cartels[str_detect(string = cartels, pattern = "Nutvalues_ingr")]
 doouts <- 1 # print outputs
 
 
-# by dataset and algorithm, define the list of dataset, before and after automatic frame filtering of:
+### by dataset and algorithm, define the list of dataset, before and after automatic frame filtering of: ###
 df_fin_reportino3_list <- list() # nutritional values
 df_fin_reportino3_ingr_list <- list()  # ingredients
 dato_5runs_performances_list <- list() # performance error of nutritional values
 dato_5runs_perf_aggr_all_data  <- list() # aggregated performance error of nutritional values
+ba_bias_all_data <- list() # list of Bland-Altman LoAs width
 mispred_reportino3_list <- list() # list of mispredicted dishes
 conf_matrix_list <- list() # list of performances of ingredients and confusion matrices coordinates (linking data to "data_ingr_performance_list")
 data_ingr_performance_list  <- list() # list of performances of ingredients, confusion matrices coordinates, status of misdetection
@@ -87,18 +101,21 @@ dish_ingr_performances_metric_all_data <- list() # list of performances of ingre
 
 
 nutrients <- c("cal_gt", "fat_gt", "carb_gt", "prot_gt", "mass_gt")
-nutrients_names <- c( "Energy content (kcal)", "Fat content (g)", "Carbohydrates content (g)", "Protein content (g)", "Mass (g)")
+nutrients_names <- c( "Energy content", "Fat content", "Carbohydrate content", "Protein content", "Mass")
+unit_nutrients <- c("(kcal)", "(g)", "(g)", "(g)", "(g)")
 
 nutrients_sorted <- c( "mass_gt", "cal_gt", "prot_gt", "fat_gt", "carb_gt" )
-nutrients_names_sorted <- c( "Mass (g)", "Energy content (kcal)", "Protein content (g)", "Fat content (g)", "Carbohydrates content (g)")
+nutrients_names_sorted <- c( "Mass", "Energy content", "Protein content", "Fat content", "Carbohydrate content")
+unit_nutrients_sorted <- c("(g)", "(kcal)", "(g)", "(g)", "(g)")
 
 datsets_4data <- c("ita_corr", "ita_orig", "usa_corr", "usa_orig")
-data_names_4data <- apply(expand.grid(c("IT FCBD", "US FCBD"), c("—correction", "—no correction")), 1, paste, collapse = "")[c(1, 3, 2, 4)]
+data_names_4data <- apply(expand.grid(c("IT FCDB", "US FCDB"), c("—correction", "—no correction")), 1, paste, collapse = "")[c(1, 3, 2, 4)]
 
 datsets_2data <- datsets_4data[c(1, 3)]
 data_names_2data <- data_names_4data[c(1, 3)]
 
-## FUNCTIONS for: accordances over quantiles; performances (error functions); table- plot- related ###
+
+##### FUNCTIONS for: accordances over quantiles; performances (error functions); table- plot- related #####
 
 quartili <- function(x){
   q4 <- quantile(x, probs = seq(0, 1, 0.25))
@@ -167,7 +184,7 @@ firstup <- function(x) {
 RMSE <- function(x) sqrt(mean(x^2))
 MSE <- function(x) mean(x^2)
 MAE <- function(x) mean(abs(x))
-MAPE <- function(x) 100*mean(x)
+'MAE%' <- function(x) 100*mean(x)
 
 # MAAPE? https://www.sciencedirect.com/science/article/pii/S0169207013000121
 # MAAPE <- function(x) 100*mean(atan(x))
@@ -177,7 +194,7 @@ MAPE <- function(x) 100*mean(x)
 fn_add_median <- function(var) {
   dato_5runs_perf_long %>%
     filter( !grepl( "no correction", dataset) ) %>%
-    dplyr::group_by(model, metric, nutrient) %>%
+    dplyr::group_by(model, metrics, nutrient) %>%
     #dplyr::group_by(.data[[variable]]) %>%
     #dplyr::arrange(.data[[variable]]) %>%
     dplyr::summarise_at(.vars = "value",
@@ -185,7 +202,7 @@ fn_add_median <- function(var) {
                                       "median" = median
                         )) %>%
     ungroup() %>%
-    group_by(model, metric) %>%
+    group_by(model, metrics) %>%
     dplyr::summarise_at(.vars = var,
                         .funs =  list("median" = median)) %>%
     ungroup()
@@ -231,6 +248,16 @@ df_nutrition5k <-
 
 #cartel = cartels[1]
 #cartel = cartels[2]
+
+
+##### run to start from this point if you want to jump the cycles (chunks 1-3) ... and go to chunk 4 #####
+
+{
+  setwd( paste(wd_main, wd_output_data, sep = "/") )
+  
+  load(file = "reportino3_after_cycles.RData")
+}
+
 
 for( cartel in cartels ){
   
@@ -375,8 +402,10 @@ for( cartel in cartels ){
   
   ### final data ###
   if(doouts == 1){
+    
     write.csv2(x = df_fin_reportino3, file = "./support_data/df_fin_reportino3.csv", row.names = F)
     # df_fin_reportino3 <- read.csv2(file = "./support_data/df_fin_reportino3.csv")
+    
   }
   
   cat( "our sample by model and dataset: n = ", dim(df_fin_reportino3)[1]/(sum(table(df_fin_reportino3$model, df_fin_reportino3$dataset) > 0)) ) #  in quanto ho 676 x 4 modelli con 4 dataset,  1 algoritmo con 2 dataset
@@ -416,10 +445,12 @@ for( cartel in cartels ){
       dims <- dim(temp)
       
       if(dims[1] == 0){
-        cat("######## data unavailable ######## \n")
-      }else{
-        #describe(temp)
         
+        cat("######## data unavailable ######## \n")
+        
+      }else{
+        
+        #describe(temp)
         comp.quartili <- apply(temp, 2, quartili)
         comp.quintili <- apply(temp, 2, quintili)
         
@@ -442,7 +473,9 @@ for( cartel in cartels ){
   
   ### final data with quantiles ###
   if(doouts == 9999){
+    
     write.csv2(x = df_fin_reportino3, file = "./support_data/df_fin_reportino3_quantiles.csv", row.names = F)
+    
   }
   
   
@@ -461,13 +494,15 @@ for( cartel in cartels ){
   for(i in 1:length(names(table(temp$dataset)))){
     temp$dataset[temp$dataset == names(table(temp$dataset))[i]] <- data_names[i]
   }
+  
   temp$dataset <- factor(temp$dataset, levels = data_names_sorted)
+  
   
   tabella_nut_observed <- 
     temp %>%
     tbl_summary(
       by = dataset,
-      label = setNames(as.list(nutrients_names_sorted), nm = names(temp)[ 1:5 ]),
+      label = setNames(as.list(paste(nutrients_names_sorted, unit_nutrients)), nm = names(temp)[ 1:5 ]),
       percent = "column",
       missing = "ifany",
       type = list(all_continuous() ~ "continuous2"),
@@ -486,16 +521,18 @@ for( cartel in cartels ){
   
   
   if(doouts == 1){
+    
     cat("\n printing tables... \n")
-    save_as_docx(tabella_nut_observed, path = "./tables/table_s2_descriptive_observed.docx")
+    save_as_docx(tabella_nut_observed, path = "./tables/Table_s2_descriptive_observed.docx")
+    
   }
   
   
   ### OBSERVED VALUES TO COMPARE WITH "Tailoring" ###
-  
   chose_model <- df_fin_reportino3$model[1] #choose the model
   
-  test <- df_fin_reportino3 %>%
+  test <- 
+    df_fin_reportino3 %>%
     filter(dataset %in% c("usa_corr", "ita_corr"),
            model == chose_model      # choosed model
     ) %>%
@@ -505,7 +542,7 @@ for( cartel in cartels ){
       values_from = contains(c("pred", "gt"))
     ) 
   
-  # OBSERVED VALUES FOR ITA_CORR (TO COMPARE WITH "Tailoring")
+  ### OBSERVED VALUES FOR ITA_CORR (TO COMPARE WITH "Tailoring") ###
   tabella_ita_corr_obs <-
     test %>%
     select("recipe_id" | contains("_gt_ita_corr") ) %>% 
@@ -523,12 +560,11 @@ for( cartel in cartels ){
                      ))) %>%
     round(., 2) %>%
     pivot_longer(everything(), names_sep = '_', names_to=c('.value', 'Target variables'))  %>% 
-    rename_with(.cols = 2:6, ~ gsub(".", "_", nutrients_names_sorted, fixed = TRUE)) %>%
-    regulartable() %>% autofit()
+    rename_with(.cols = 2:6, ~ gsub(".", "_", paste(nutrients_names_sorted, unit_nutrients_sorted), fixed = TRUE)) %>% flextable %>% autofit
   
   tabella_ita_corr_obs
   
-  # OBSERVED VALUES FOR USA_CORR (TO COMPARE WITH "Tailoring")
+  ### OBSERVED VALUES FOR USA_CORR (TO COMPARE WITH "Tailoring") ###
   tabella_usa_corr_obs <-
     test %>% 
     select("recipe_id" | contains("_gt_usa_corr") ) %>% 
@@ -546,22 +582,23 @@ for( cartel in cartels ){
                      ))) %>%
     round(., 2) %>%
     pivot_longer(everything(), names_sep = '_', names_to = c('.value', 'Target variables'))  %>% 
-    rename_with(.cols = 2:6, ~ gsub(".", "_", nutrients_names_sorted, fixed = TRUE)) %>%
-    regulartable() %>% autofit()
+    rename_with(.cols = 2:6, ~ gsub(".", "_", paste(nutrients_names_sorted, unit_nutrients_sorted), fixed = TRUE)) %>% flextable %>% autofit
   
   tabella_usa_corr_obs
   
   
   if(doouts == 1){
+    
     save_as_docx(tabella_ita_corr_obs, path = "./support_data/table-1b_match_ita-corr-vs-reportino1.docx")
     save_as_docx(tabella_usa_corr_obs, path = "./support_data/table-1a_match_usa-corr-vs-reportino1.docx")
+    
   }
   
   
   names(test)
   s <- ncol(test) + 1
   
-  # calculating residuals
+  ### calculating residuals ###
   for(j in 1:10){ 
     
     temp <-  paste(paste("diff", substr(names(test)[j + 1], start = 1, stop = 3), sep = "-"), as.character(na.omit(str_extract(string = names(test)[j + 1], pattern = datsets))), sep = "_" )
@@ -575,24 +612,25 @@ for( cartel in cartels ){
   }
   
   
-  # TABLE RESIDUALs (model chosed above)
-  tabella <- test %>% summarise(across(names(test)[s:(s + 9)], 
-                                       .fns = list(Min = min,
-                                                   Q1 = ~quantile(., 0.25),
-                                                   Me = median,
-                                                   Q3 = ~quantile(., 0.75),
-                                                   Max = max,
-                                                   Mean = mean,
-                                                   SD = sd
-                                       )
-  )
-  ) %>% 
+  ### TABLE RESIDUALs (model chosed above) ###
+  tabella <- 
+    test %>% 
+    summarise(across(names(test)[s:(s + 9)], 
+                     .fns = list(Min = min,
+                                 Q1 = ~quantile(., 0.25),
+                                 Me = median,
+                                 Q3 = ~quantile(., 0.75),
+                                 Max = max,
+                                 Mean = mean,
+                                 SD = sd
+                                 )
+                     )
+    ) %>% 
     select(contains("usa_corr")) %>%
     rename_all( ~ str_remove(.x, "_usa_corr")) %>%
     round(., 2) %>%
     pivot_longer(everything(), names_sep='_', names_to = c('.value', paste( 'Residuals of target variables \n of', chose_model ) )) %>%
-    rename_at(.vars = -1, ~ nutrients_names_sorted) %>%
-    regulartable() %>% autofit()
+    rename_at(.vars = -1, ~ paste(nutrients_names_sorted, unit_nutrients_sorted)) %>% regulartable %>% autofit
   
   tabella
   
@@ -603,6 +641,7 @@ for( cartel in cartels ){
   
   temp <- bind_rows(dato_5runs)
   dim(temp)[1]/(length(table(temp$run))*(sum(table(df_fin_reportino3$model, df_fin_reportino3$dataset) > 0))) # == 676, in quanto ho 676 x 5 run x 4 modelli con 4 dataset,  1 algoritmi con 2 dataset
+  
   dato_5runs <- as.data.frame(temp)
   
   
@@ -614,7 +653,7 @@ for( cartel in cartels ){
   s_start <- dim(dato_5runs)[2] + 1
   s <- 0
   
-  # CALCULATING DIEFFERENCE between PREDICTED and OBSERVED NUTRITIONAL VALUEs for METRICS
+  ### CALCULATING DIEFFERENCE between PREDICTED and OBSERVED NUTRITIONAL VALUEs for METRICS ###
   for(k in 1:length(nomi_diffs)){
     
     dato_5runs[, s_start + s] <- NA
@@ -662,11 +701,12 @@ for( cartel in cartels ){
   
   
   s_end <- dim(dato_5runs)[2]
-  cols_res <- dato_5runs %>% select(contains("_res")) %>% names()
-  cols_abs <- dato_5runs %>% select(contains("_abs")) %>% names()
+  cols_res <- dato_5runs %>% select(contains("_res")) %>% names
+  cols_abs <- dato_5runs %>% select(contains("_abs")) %>% names
   
   
-  dato_5runs_performances <- dato_5runs %>%
+  dato_5runs_performances <- 
+    dato_5runs %>%
     select( 1, 2, s_end - 11:0 ) %>% 
     mutate(run = as.factor(run),
            dataset = as.factor(dataset)) %>%
@@ -676,7 +716,8 @@ for( cartel in cartels ){
                           MAE =~ MAE(.)),
                      .names = "{.fn}_{.col}"),
               across(any_of(cols_abs),
-                     list(MAPE = MAPE), .names = "{.fn}_{.col}")) %>% 
+                     list(`MAE%` = `MAE%`), .names = "{.fn}_{.col}")
+              ) %>% 
     ungroup() %>%
     group_by(dataset, model) %>%
     summarise(across(where(is.numeric), ~ mean(.x, na.rm = TRUE))) %>% 
@@ -691,10 +732,10 @@ for( cartel in cartels ){
     dato_5runs_performances %>%
     filter( grepl("2\\+2", model) ) %>%
     group_by(dataset, model) %>% 
-    pivot_longer(cols = 3:17, names_to = c('metric', 'nutrient'),
+    pivot_longer(cols = 3:17, names_to = c('metrics', 'nutrient'),
                  names_sep = '_', values_to = "value"
     )  %>% 
-    mutate_at(.vars = "metric", ~factor(., levels = c("RMSE", "MAE", "MAPE"))) %>% 
+    mutate_at(.vars = "metrics", ~factor(., levels = c("RMSE", "MAE", "MAE%"))) %>% 
     mutate(
       dataset = factor(dataset, levels = datsets_sorted, labels = data_names_sorted),
       nutrient = factor(nutrient, levels = gsub(x = nutrients_sorted, pattern = "_gt", replacement = ""), labels = nutrients_names_sorted),
@@ -709,10 +750,10 @@ for( cartel in cartels ){
     
     dato_5runs_perf_long <-
       dato_5runs_perf_long %>%
-      group_by(metric, nutrient, dataset, model != "IncV3_2+2") %>%
+      group_by(metrics, nutrient, dataset, model != "IncV3_2+2") %>%
       mutate(value2 = median(value) ) %>% 
       ungroup() %>%
-      group_by(metric, nutrient, dataset) %>%
+      group_by(metrics, nutrient, dataset) %>%
       mutate(point_level = median(value2) ) %>% 
       select(!c('model != "IncV3_2+2"', value2)) %>%
       ungroup()
@@ -721,7 +762,7 @@ for( cartel in cartels ){
     
     dato_5runs_perf_long <-
       dato_5runs_perf_long %>%
-      group_by(metric, nutrient, dataset) %>%
+      group_by(metrics, nutrient, dataset) %>%
       mutate(point_level = median(value) ) %>% 
       ungroup()
     
@@ -735,8 +776,10 @@ for( cartel in cartels ){
   
   
   if(doouts == 1){
+    
     # xlsx single models performance by run by nutrient and dataset
     write.csv2(x = as.data.frame(dato_5runs_perf_long), file = "./support_data/algorithms_median_performances.csv")
+    
   }
   
   
@@ -752,9 +795,9 @@ for( cartel in cartels ){
   q <- list()
   
   
-  for(k in 1:nlevels(dato_5runs_perf_long$metric)){
+  for(k in 1:nlevels(dato_5runs_perf_long$metrics)){
     
-    title_metric <- levels(dato_5runs_perf_long$metric)[k]             
+    title_metrics <- levels(dato_5runs_perf_long$metrics)[k]             
     
     for(s in 1:nlevels(dato_5runs_perf_long$nutrient)){
       
@@ -764,7 +807,7 @@ for( cartel in cartels ){
       
       title_target <- levels(dato_5runs_perf_long$nutrient)[s]
       
-      temp <- as.data.frame(subset(dato_5runs_perf_long, (dato_5runs_perf_long$metric == title_metric) & (dato_5runs_perf_long$nutrient == title_target))) %>%
+      temp <- as.data.frame(subset(dato_5runs_perf_long, (dato_5runs_perf_long$metrics == title_metrics) & (dato_5runs_perf_long$nutrient == title_target))) %>%
         mutate(model = gsub(x = model, pattern = "_IN1k", replacement = ""),
                dataset = factor(dataset, levels = data_names_sorted,
                                 labels = gsub(x = data_names_sorted, pattern = "-", replacement = "- \n " )
@@ -780,27 +823,41 @@ for( cartel in cartels ){
       lim2 <- 1.0 * max(temp$value)
       
       if( i <= 5){ 
+        
         title_target_set = element_text(size = 9)
         title_data_set = element_text(size = 8)
+        
       }else{
+        
         title_target_set = element_blank()
         title_data_set = element_blank()
+        
       }
       
       if( (i-1) %% 5 == 0){ 
-        title_metric_set = element_text(size = 10, hjust = 0.5, vjust = -2, face = "bold.italic")
+        
+        title_metrics_set = element_text(size = 10, hjust = 0.5, vjust = -2, face = "bold.italic")
+        
       }else{
-        title_metric_set = element_blank() 
+        
+        title_metrics_set = element_blank() 
+        
       }
       
       if(k == 3){
+        
         labelling = scales::percent_format(scale = 1) 
+        
       }else{
+        
         labelling = scales::number_format()
+        
       }
       
-      temp_segments <- temp %>%
-        distinct(dataset, point_level) %>%
+      
+      temp_segments <- 
+        temp %>%
+        distinct(dataset, point_level, pair) %>%
         mutate(
           x = as.numeric(rev(dataset)),
           xstart = x - 0.3,
@@ -808,26 +865,27 @@ for( cartel in cartels ){
         )
       
       q[[i]] <- 
-        ggplot(temp, aes(x = dataset, y = value)) +
-        geom_col(aes(fill = model), position = position_dodge(1)) +
-        labs(title = title_metric, x = title_target) +
+        ggplot(data = temp, mapping = aes(x = dataset, y = value)) +
+        geom_col(mapping = aes(fill = model), position = position_dodge(1)) +
+        labs(title = title_metrics, x = title_target) +
         scale_x_discrete(limits = rev, drop = F) +
         coord_flip() +
         geom_point(data = temp_segments,
-                   aes(x = dataset, y = point_level)
+                   mapping = aes(x = dataset, y = point_level)
         ) +
-        geom_segment(data = temp_segments,
-                     aes(x = xstart, xend = xend, y = point_level, yend = point_level),
+        geom_line(data = temp_segments, mapping = aes(x = x, y = point_level), 
+                  color = "red3", lty = "dotted", size = 0.8
+        ) +
+        geom_segment(data = temp_segments,mapping = aes(x = xstart, xend = xend, y = point_level, yend = point_level),
                      color = "black", size = 1.
         ) +
-        geom_line(aes(x = dataset, y = point_level, group = pair), color = "red3", lty = "dotted", size = 0.8) +
         theme_minimal(base_size = 20) +
         scale_y_continuous(n.breaks = 7, labels = labelling) +
         theme(axis.title.y = title_target_set,
               axis.text.y = title_data_set,
               axis.title.x = element_blank(),
               axis.text.x = element_text(size = 8, vjust = 10),
-              plot.title = title_metric_set,
+              plot.title = title_metrics_set,
               plot.margin = rep(unit(0, "null"), 4),
               panel.margin = unit(0, "null"),
               legend.position = "none") +
@@ -883,7 +941,7 @@ for( cartel in cartels ){
     #par(mar = c(0, 0, 0, 0))
     
     ggsave2(
-      filename = paste0("./figures/figure_all_performances.pdf"),
+      filename = paste0("./figures/Figure_all_performances.pdf"),
       plot = p,
       width = 12, height = 18,
       scale = 2,
@@ -896,14 +954,14 @@ for( cartel in cartels ){
     
   }
   
-  ## MAPE aggregated
+  ### MAE% aggregated ###
   p <- list()
   
   for(k in 1:nlevels(dato_5runs_perf_long$nutrient)){
     
     target <- levels(dato_5runs_perf_long$nutrient)[k]             
     
-    temp <- as.data.frame(subset(dato_5runs_perf_long, (dato_5runs_perf_long$nutrient == target)&(dato_5runs_perf_long$metric == "MAPE")))
+    temp <- as.data.frame(subset(dato_5runs_perf_long, (dato_5runs_perf_long$nutrient == target)&(dato_5runs_perf_long$metrics == "MAE%")))
     
     
     if( condition_star ){
@@ -912,7 +970,7 @@ for( cartel in cartels ){
     
     
     temp <- 
-      temp %>% ungroup() %>%
+      temp %>% ungroup %>%
       mutate(pair = ifelse(str_detect(string = temp$dataset, pattern = "IT"), "IT", "US")) %>%
       select(!c(point_level, pair)) %>%
       group_by(nutrient, model) %>%
@@ -1008,26 +1066,28 @@ for( cartel in cartels ){
     temp2 <- subset(dato_5runs_perf_long,
                     (dato_5runs_perf_long$nutrient == i) & !(str_detect(string = dato_5runs_perf_long$dataset, pattern = "no correction")) ) %>%  # nutriente i
       select(-nutrient) %>%
-      group_by(model, metric) %>%                            # across dataset 
+      group_by(model, metrics) %>%                            # across dataset 
       summarise_at(.vars = "value",
                    .funs = list("mean" = mean,
                                 "median" = median
                    )) %>%
       ungroup()
     
+    
     for(j in names(table(dato_5runs_perf_long$dataset))){
+      
       k <- k + 1
       
       temp <- subset(dato_5runs_perf_long,
                      (dato_5runs_perf_long$dataset == j)&(dato_5runs_perf_long$nutrient == i)) %>% 
         ungroup() %>%
-        select(metric, value, model)
+        select(metrics, value, model)
       
       
       tabella[[k]] <- 
         imap(c("value" = "{mean}"),
              ~ as.data.frame(temp) %>%
-               tbl_continuous(by = metric,
+               tbl_continuous(by = metrics,
                               variable = value,
                               statistic = ~.x,
                               label = list(model = j),
@@ -1039,10 +1099,12 @@ for( cartel in cartels ){
                  all_stat_cols() ~ "**{level}**") #%>%
         ) %>%
         tbl_merge(tab_spanner = FALSE) %>%
-        modify_footnote(~NA) %>% modify_header(label = "**FCDB**",
-                                               "stat_1_1" = "**RMSE**",
-                                               "stat_2_1" = "**MAE**",
-                                               "stat_3_1" = "**MAPE**")
+        modify_footnote(~NA) %>% 
+        modify_header(label = "**FCDB**",
+                      "stat_1_1" = "**RMSE**",
+                      "stat_2_1" = "**MAE**",
+                      "stat_3_1" = "**MAE%**"
+                      )
       
     }
     
@@ -1051,7 +1113,7 @@ for( cartel in cartels ){
     tabella3a[[s]] <-
       imap(c("Mean" = "{mean}"),
            ~ as.data.frame(temp2) %>% select(!median) %>%
-             tbl_continuous(by = metric,
+             tbl_continuous(by = metrics,
                             variable = mean,
                             statistic = ~.x,
                             label = list(model = i),
@@ -1063,16 +1125,17 @@ for( cartel in cartels ){
                all_stat_cols() ~ "**{level}**") #%>%
       ) %>%
       tbl_merge(tab_spanner = FALSE) %>%
-      modify_footnote(~NA) %>% modify_header(label = "**Target variables**",
-                                             "stat_1_1" = "**RMSE**",
-                                             "stat_2_1" = "**MAE**",
-                                             "stat_3_1" = "**MAPE**")
-    
+      modify_footnote(~NA) %>% 
+      modify_header(label = "**FCDB**",
+                    "stat_1_1" = "**RMSE**",
+                    "stat_2_1" = "**MAE**",
+                    "stat_3_1" = "**MAE%**"
+      )
     
     tabella3b[[s]] <-
       imap(c("Median" = "{median}"),
            ~ as.data.frame(temp2) %>% select(!mean) %>%
-             tbl_continuous(by = metric,
+             tbl_continuous(by = metrics,
                             variable = median,
                             statistic = ~.x,
                             label = list(model = i),
@@ -1084,16 +1147,17 @@ for( cartel in cartels ){
                all_stat_cols() ~ "**{level}**") #%>%
       ) %>%
       tbl_merge(tab_spanner = FALSE) %>%
-      modify_footnote(~NA) %>% modify_header(label = "**Target variables**",
-                                             "stat_1_1" = "**RMSE**",
-                                             "stat_2_1" = "**MAE**",
-                                             "stat_3_1" = "**MAPE**")
-    
+      modify_footnote(~NA) %>% 
+      modify_header(label = "**FCDB**",
+                    "stat_1_1" = "**RMSE**",
+                    "stat_2_1" = "**MAE**",
+                    "stat_3_1" = "**MAE%**"
+      )
     
     tabella3a[[s + 1]] <-
       imap(c("Mean" = "{mean}"),
            ~ as.data.frame(fn_add_median(var = "mean")) %>%
-             tbl_continuous(by = metric,
+             tbl_continuous(by = metrics,
                             variable = median,
                             statistic = ~.x,
                             label = list(model = "Overall"),
@@ -1105,15 +1169,17 @@ for( cartel in cartels ){
                all_stat_cols() ~ "**{level}**") #%>%
       ) %>%
       tbl_merge(tab_spanner = FALSE) %>%
-      modify_footnote(~NA) %>% modify_header(label = "**Target variables**",
-                                             "stat_1_1" = "**RMSE**",
-                                             "stat_2_1" = "**MAE**",
-                                             "stat_3_1" = "**MAPE**")
+      modify_footnote(~NA) %>% 
+      modify_header(label = "**FCDB**",
+                    "stat_1_1" = "**RMSE**",
+                    "stat_2_1" = "**MAE**",
+                    "stat_3_1" = "**MAE%**"
+      )
     
     tabella3b[[s + 1]] <-
       imap(c("Median" = "{median}"),
            ~ as.data.frame(fn_add_median(var = "median")) %>%
-             tbl_continuous(by = metric,
+             tbl_continuous(by = metrics,
                             variable = median,
                             statistic = ~.x,
                             label = list(model = "Overall"),
@@ -1125,20 +1191,21 @@ for( cartel in cartels ){
                all_stat_cols() ~ "**{level}**") #%>%
       ) %>%
       tbl_merge(tab_spanner = FALSE) %>%
-      modify_footnote(~NA) %>% modify_header(label = "**Target variables**",
-                                             "stat_1_1" = "**RMSE**",
-                                             "stat_2_1" = "**MAE**",
-                                             "stat_3_1" = "**MAPE**")
-    
+      modify_footnote(~NA) %>% 
+      modify_header(label = "**FCDB**",
+                    "stat_1_1" = "**RMSE**",
+                    "stat_2_1" = "**MAE**",
+                    "stat_3_1" = "**MAE%**"
+                    )    
     
   }
   
   
-  # table of performances over datasets by nutrient and metrics
-  tabella_all_perf <- tbl_merge(tbls = tabella2, tab_spanner = nutrients_names_sorted) %>% as_flex_table()
+  ### table of performances over datasets by nutrient and metrics ###
+  tabella_all_perf <- tbl_merge(tbls = tabella2, tab_spanner = nutrients_names_sorted) %>% as_flex_table
   tabella_all_perf
   
-  # table of dataset-aggregated performances over datasets by nutrient and metrics
+  ### table of dataset-aggregated performances over datasets by nutrient and metrics ###
   tabella3a <- tbl_stack(tbls = tabella3a) # mean values
   tabella3b <- tbl_stack(tbls = tabella3b) # median values
   
@@ -1157,8 +1224,8 @@ for( cartel in cartels ){
     
     cat("...printing tables of performances...")
     
-    save_as_docx(tabella_all_perf, path = paste0("./tables/table_s6_all-performances.docx"))  
-    save_as_docx(tabella_aggr_perf, path = paste0("./tables/table_median_performances.docx"))
+    save_as_docx(tabella_all_perf, path = paste0("./tables/Table_s6_all-performances.docx"))  
+    save_as_docx(tabella_aggr_perf, path = paste0("./tables/Table_median_performances.docx"))
     
   }    
   
@@ -1166,13 +1233,13 @@ for( cartel in cartels ){
   #### 2 - BLAND-ALTMAN PLOTs, WILCOXON, ACCORDANCEs, ALL DISHes PREDICTED/OBSERVED VALUEs, LIST OF MISPREDICTED DISHes ####
   
   ##### 2a -  Bland-Altman plots, wilcoxon, accordances, all dishes predicted/observed values #####
-  
   cat("\n \n ######### BLAND-ALTMAN PLOTs, WILCOXON, ACCORDANCEs, ALL DISHes PREDICTED/OBSERVED VALUEs, LIST OF MISPREDICTED DISHes \n ##########")
   
   datsets <- datsets_2data
   data_names <- data_names_2data 
   datsets_sorted <- rev(datsets)
   data_names_sorted <- rev(data_names)
+  ba_bias_all <- data.frame()
   
   
   df_fin_reportino3 <- 
@@ -1191,13 +1258,18 @@ for( cartel in cartels ){
   ylab_ba <- paste("Difference between predicted and observed values")
   
   
-  tabella_wilkx <- matrix(NA,
-                          ncol = length(names(table(df_fin_reportino3$model))) + 2,
-                          nrow = length(nutrients_names)*length(data_names))
+  tabella_wilkx <- 
+    matrix(NA,
+           ncol = length(names(table(df_fin_reportino3$model))) + 2,
+           nrow = length(nutrients_names)*length(data_names)
+           )
+  
   row.names(tabella_wilkx) <- do.call(what = paste, expand.grid(data_names, nutrients_names)) 
   colnames(tabella_wilkx) <- c("Outcome", "FCBD", names(table(df_fin_reportino3$model)))
-  tabella_wilkx[, 1] <- rep(nutrients_names, each = length(data_names))
+  
+  tabella_wilkx[, 1] <- rep(paste(nutrients_names, unit_nutrients), each = length(data_names))
   tabella_wilkx[, 2] <- rep(data_names)
+  
   
   tabella_quart_k <- tabella_wilkx
   tabella_quart_perf <- tabella_wilkx
@@ -1228,8 +1300,10 @@ for( cartel in cartels ){
       n_data
       
       if(length(n_data) > 0){
-        cat("\n found old data that must be delected...and they will \n")
+        
+        cat(red("\n found old data that must be delected...and they will \n"))
         unlink( x = "./tables/list_*")
+        
       }
       
     }
@@ -1259,14 +1333,13 @@ for( cartel in cartels ){
       ) %>%
       mutate(across(where(is.numeric), round, sign_digt),
              dataset = factor(dataset, levels = datsets_sorted, labels = data_names_sorted),
-             nutrient = nutrients_names[k]
+             nutrient = paste(nutrients_names[k], unit_nutrients[k])
       )
     
     
     tabella2 <- rbind(tabella2, tabella)
     
-    
-    tabella <- tabella %>% regulartable() %>% autofit()
+    tabella <- tabella %>% flextable %>% autofit
     
     cat("Nutrient:", nutrients_names[k], "\n")
     
@@ -1354,8 +1427,22 @@ for( cartel in cartels ){
           tabella_wilkx[2*k  - (2 - t), 2 + r] <- as.character(round(diff_test$p.value, sign_digt))
           
           ba_stat <- bland.altman.stats(df_fin_reportino3[subdata, 3 + k], df_fin_reportino3[subdata, 8 + k])
+          
+          ba_bias_all <- 
+            rbind(ba_bias_all,
+                  data.frame(nutrient = gsub(x = y, pattern = "_pred", replacement = ""),
+                             dataset = i,
+                             algorithm = j,
+                             bias = mean(ba_stat$diffs, na.rm = TRUE),
+                             absolute_bias = abs(mean(ba_stat$diffs, na.rm = TRUE)),
+                             width_loas = ifelse(prod(ba_stat$lines[-2]) < 0, sum(abs(ba_stat$lines[-2])), diff(abs(ba_stat$lines[-2]))),
+                             stringsAsFactors = FALSE
+                             )
+                  )
+          
           eps <- (abs(min(ba_stat$diffs)) + max(ba_stat$diffs))/10
-          breaks = as.numeric(sort(c(seq(min(ba_stat$diffs), max(ba_stat$diffs), by = eps), ba_stat$lines)))
+          
+          breaks <- as.numeric(sort(c(seq(min(ba_stat$diffs), max(ba_stat$diffs), by = eps), ba_stat$lines)))
           breaks <- sort(c(breaks[-which((breaks > ba_stat$lines[1] - eps)&(breaks < ba_stat$lines[3] + eps))], ba_stat$lines))
           labels = as.character(round(breaks,2))
           
@@ -1402,9 +1489,9 @@ for( cartel in cartels ){
           }
           
           
-          residui <- abs(df_fin_reportino3[subdata, 3 + k] - df_fin_reportino3[subdata, 8 + k])
-          quantiles <- as.numeric(quantile(x = residui, probs = 0.95))
-          point_labs <- as.numeric(which(findInterval(x = residui, vec = quantiles) %in% 1))
+          residuals <- abs(df_fin_reportino3[subdata, 3 + k] - df_fin_reportino3[subdata, 8 + k])
+          quantiles <- as.numeric(quantile(x = residuals, probs = 0.95))
+          point_labs <- as.numeric(which(findInterval(x = residuals, vec = quantiles) %in% 1))
           
           dish_list_quantile_complete[[r]] <- cbind(df_fin_reportino3[subdata, c("recipe_id", "model", "dataset", "num_ingr_per_dish")], #[subdata[point_labs], c(1, 2, 3, 14, 15)], 
                                                     predicted =  df_fin_reportino3[subdata, 3 + k],
@@ -1458,14 +1545,14 @@ for( cartel in cartels ){
         
         flag2 <- ifelse(flag == 1, "30_dishes_", "")
         
-        n_data <- dir(path = "./support_data//")  
+        n_data <- dir(path = "./support_data/")  
         target <- paste0(data_names[t], "_", substr(y, start = 1, stop = 4))
         
         
-        list_dish <- as.data.frame(bind_rows(list_dish)  %>%  group_by(recipe_id) %>% mutate(total_count = n()) %>% arrange())
-        list_dish_complete <- bind_rows(list_dish_complete) %>% group_by(recipe_id) %>% mutate(total_count = sum(statement == 1, na.rm = TRUE)) %>% arrange() %>% as.data.frame
-        dato_dish_quantile <- as.data.frame(bind_rows(dato_dish_quantile)  %>%  group_by(recipe_id) %>% mutate(total_count = n()) %>% arrange())
-        dish_list_quantile_complete <- bind_rows(dish_list_quantile_complete)  %>%  group_by(recipe_id) %>% mutate(total_count = sum(statement == 1, na.rm = TRUE)) %>% arrange() %>% as.data.frame
+        list_dish <- as.data.frame(bind_rows(list_dish)  %>%  group_by(recipe_id) %>% mutate(total_count = n()) %>% arrange)
+        list_dish_complete <- bind_rows(list_dish_complete) %>% group_by(recipe_id) %>% mutate(total_count = sum(statement == 1, na.rm = TRUE)) %>% arrange %>% as.data.frame
+        dato_dish_quantile <- as.data.frame(bind_rows(dato_dish_quantile)  %>%  group_by(recipe_id) %>% mutate(total_count = n()) %>% arrange)
+        dish_list_quantile_complete <- bind_rows(dish_list_quantile_complete)  %>%  group_by(recipe_id) %>% mutate(total_count = sum(statement == 1, na.rm = TRUE)) %>% arrange %>% as.data.frame
 
         
         title_xlsx = paste0("list_bland_altman_", flag2, substr(y, start = 1, stop = 4) , ".xlsx")
@@ -1521,7 +1608,7 @@ for( cartel in cartels ){
     title_plot <-   
       ggplot() +
       theme_void() +
-      annotate("text", x = 0.5, y = 0.5, label = nutrients_names[k], size = 12, hjust = 0.5, vjust = 0.5)
+      annotate("text", x = 0.5, y = 0.5, label = paste(nutrients_names[k], unit_nutrients[k]), size = 12, hjust = 0.5, vjust = 0.5)
     
     title_plot_x <-   
       ggplot() +
@@ -1551,7 +1638,17 @@ for( cartel in cartels ){
       par( mar = c(0, 0, 0, 0) )
       
       ggsave2(
-        filename = paste0("./figures/supfig", vec_plot[k], "_BA_", flag2,  target,".pdf"),
+        filename = paste0("./figures/Subfig_", vec_plot[k], "_ba_", flag2,  target, ".pdf"),
+        plot = p2,
+        width = 10, height = 14,
+        scale = 3,
+        units = c("cm"),
+        dpi = 300,
+        limitsize = TRUE)
+      dev.off()
+      
+      ggsave2(
+        filename = paste0("./figures/Subfig_", vec_plot[k], "_ba_", flag2,  target, ".jpg"),
         plot = p2,
         width = 10, height = 14,
         scale = 3,
@@ -1568,72 +1665,75 @@ for( cartel in cartels ){
     
     cat("\n printing tables of accordances and predicted values...\n")
     
-    folder = paste0("./support_data/table_wilcoxon")
+    folder = paste0("./support_data/Table_wilcoxon")
     tabella_wilkx <- as.data.frame(tabella_wilkx, row.names = subdata) 
     write.xlsx(x = tabella_wilkx, file = paste0(folder, ".xlsx"))
-    tabella_wilkx <- tabella_wilkx %>% regulartable() %>% autofit()
+    tabella_wilkx <- tabella_wilkx %>% flextable %>% autofit
     save_as_docx(tabella_wilkx, path = paste0(folder, ".docx"))
     
     
-    folder = paste0("./tables/table_s3_k-quart")
+    folder = paste0("./tables/Table_s3_k-quart")
     tabella_quart_k <- as.data.frame(tabella_quart_k) 
     write.xlsx(x = tabella_quart_k, file = paste0(folder, ".xlsx"))
-    tabella_quart_k <- tabella_quart_k %>% regulartable() %>% autofit()
+    tabella_quart_k <- tabella_quart_k %>% flextable %>% autofit
     save_as_docx(tabella_quart_k, path = paste0(folder, ".docx"))
     
-    folder = paste0("./support_data/table_PERF-quart")
+    folder = paste0("./support_data/Table_PERF-quart")
     tabella_quart_perf <- as.data.frame(tabella_quart_perf) 
     write.xlsx(x = tabella_quart_perf, file = paste0(folder, ".xlsx"))
-    tabella_quart_perf <- tabella_quart_perf %>% regulartable() %>% autofit()
+    tabella_quart_perf <- tabella_quart_perf %>% flextable %>% autofit
     save_as_docx(tabella_quart_perf, path = paste0(folder, ".docx"))
     
-    folder = paste0("./support_data/table_ADJ-quart")
+    folder = paste0("./support_data/Table_ADJ-quart")
     tabella_quart_adj <- as.data.frame(tabella_quart_adj) 
     write.xlsx(x = tabella_quart_adj, file = paste0(folder, ".xlsx"))
-    tabella_quart_adj <- tabella_quart_adj %>% regulartable() %>% autofit()
+    tabella_quart_adj <- tabella_quart_adj %>% flextable %>% autofit
     save_as_docx(tabella_quart_adj, path = paste0(folder, ".docx"))
     
-    folder = paste0("./support_data/table_OPP-quart")
+    folder = paste0("./support_data/Table_OPP-quart")
     tabella_quart_opp <- as.data.frame(tabella_quart_opp) 
     write.xlsx(x = tabella_quart_opp, file = paste0(folder, ".xlsx"))
-    tabella_quart_opp <- tabella_quart_opp %>% regulartable() %>% autofit()
+    tabella_quart_opp <- tabella_quart_opp %>% flextable %>% autofit
     save_as_docx(tabella_quart_opp, path = paste0(folder, ".docx"))
     
     
-    folder = paste0("./support_data/table_k-quin")
+    folder = paste0("./support_data/Table_k-quin")
     tabella_quin_k <- as.data.frame(tabella_quin_k) 
     write.xlsx(x = tabella_quin_k, file = paste0(folder, ".xlsx"))
-    tabella_quin_k <- tabella_quin_k %>% regulartable() %>% autofit()
+    tabella_quin_k <- tabella_quin_k %>% flextable %>% autofit
     save_as_docx(tabella_quin_k, path = paste0(folder, ".docx"))
     
     
-    folder = paste0("./support_data/table_PERF-quin")
+    folder = paste0("./support_data/Table_PERF-quin")
     tabella_quin_perf <- as.data.frame(tabella_quin_perf) 
     write.xlsx(x = tabella_quin_perf, file = paste0(folder, ".xlsx"))
-    tabella_quin_perf <- tabella_quin_perf %>% regulartable() %>% autofit()
+    tabella_quin_perf <- tabella_quin_perf %>% flextable %>% autofit
     save_as_docx(tabella_quin_perf, path = paste0(folder, ".docx"))
     
-    folder = paste0("./support_data/table_ADJ-quin")
+    folder = paste0("./support_data/Table_ADJ-quin")
     tabella_quin_adj <- as.data.frame(tabella_quin_adj) 
     write.xlsx(x = tabella_quin_adj, file = paste0(folder, ".xlsx"))
-    tabella_quin_adj <- tabella_quin_adj %>% regulartable() %>% autofit()
+    tabella_quin_adj <- tabella_quin_adj %>% flextable %>% autofit
     save_as_docx(tabella_quin_adj, path = paste0(folder, ".docx"))
     
-    folder = paste0("./support_data/table_OPP-quin")
+    folder = paste0("./support_data/Table_OPP-quin")
     tabella_quin_opp <- as.data.frame(tabella_quin_opp) 
     write.xlsx(x = tabella_quin_opp, file = paste0(folder, ".xlsx"))
-    tabella_quin_opp <- tabella_quin_opp %>% regulartable() %>% autofit()
+    tabella_quin_opp <- tabella_quin_opp %>% flextable %>% autofit
     save_as_docx(tabella_quin_opp, path = paste0(folder, ".docx"))
     
-    folder = paste0("./tables/table_s2_descriptive_predicted")
+    folder = paste0("./tables/Table_s2_descriptive_predicted")
     tabella2 <- as.data.frame(tabella2) 
     write.xlsx(x = tabella2, file = paste0(folder, ".xlsx"))
-    tabella2 <- tabella2 %>% regulartable() %>% autofit()
+    tabella2 <- tabella2 %>% flextable %>% autofit
     save_as_docx(tabella2, path = paste0(folder, ".docx"))
     
   }
   
+  ba_bias_all_data[[ which( cartel == cartels ) ]] <- ba_bias_all
+  names(ba_bias_all_data)[ which( cartel == cartels ) ] <- cartel
   
+
   ##### 2b - mispredicted dishes #####
   n_data <- dir(path = "./support_data/")  
   n_data <- n_data[str_detect(string = n_data, pattern = "list_complete") &
@@ -1643,7 +1743,7 @@ for( cartel in cartels ){
   
   if( length(n_data) == 0 ){
   
-    cat("\n...no data found for mispredicted dishes. This part will be jumped \n")
+    cat(red("\n...no data found for mispredicted dishes. This part will be jumped \n"))
     
   }else{
     
@@ -1665,9 +1765,11 @@ for( cartel in cartels ){
     s2 <- 1
     
     for( i in n_data ){
+      
       s <- s + 1
       
       for( j in datsets ){
+        
         k <- k + 1
         
         dato_dish_ba[[k]] <- clean_names(read.xlsx(xlsxFile = paste0("./support_data/",i), sheet =  j))
@@ -1684,7 +1786,7 @@ for( cartel in cartels ){
       
     }
     
-    # aggregating data
+    ### aggregating data ###
     dato_dish_ba_aggr <- 
       bind_rows(dato_dish_ba_aggr) %>%
       arrange(recipe_id) %>%
@@ -1696,7 +1798,7 @@ for( cartel in cartels ){
     write.xlsx(x = dato_dish_ba_aggr, file = "./support_data/bland-altman_dishes_complete.xlsx")
     
     
-    # CREATING THE LIST OF OUT-of-LoAs DISHes
+    ### CREATING THE LIST OF OUT-of-LoAs DISHes ###
     dato_dish_ba <- list() #raccoglie la lista dei piatti overLOAs
     dato_dish_ba_aggr <- list() #lista finale
     
@@ -1712,9 +1814,11 @@ for( cartel in cartels ){
     s2 <- 1
     
     for( i in n_data ){
+      
       s <- s + 1
       
       for( j in datsets ){
+        
         k <- k + 1
         
         dato_dish_ba[[k]] <- clean_names(read.xlsx(xlsxFile = paste0("./support_data/",i), sheet =  j))
@@ -1732,11 +1836,11 @@ for( cartel in cartels ){
     }
     
     
-    # JOINED DATASET WITH PLATES OUTSIDE THE LOAS AGGREGATED ACROSS DATASET
+    ### JOINED DATASET WITH PLATES OUTSIDE THE LOAS AGGREGATED ACROSS DATASET ###
     dato_dish_ba_aggr <- 
       bind_rows(dato_dish_ba_aggr) %>% 
       arrange(recipe_id) %>%
-      mutate(nutrient = factor( nutrient, levels = gsub(x = nutrients_sorted, pattern = "_gt", replacement = ""), labels = nutrients_names_sorted ),
+      mutate(nutrient = factor( nutrient, levels = gsub(x = nutrients_sorted, pattern = "_gt", replacement = ""), labels = paste(nutrients_names_sorted, unit_nutrients_sorted) ),
              dataset = factor( dataset, levels = datsets_sorted, labels = data_names_sorted )
       ) %>%
       group_by_at(.vars = c("recipe_id", "dataset", "num_ingr_per_dish", "nutrient", "total_count")) %>%   # aggregate across models: by aggregating results over models, you may observe how estimates vary by dataset (interest for datascience of nutrition) while...
@@ -1752,11 +1856,12 @@ for( cartel in cartels ){
     head(dato_dish_ba_aggr, n  = 20)
     
     
-    # table of out of LoAs
+    ### table of out of LoAs ###
     k <- 0
     tabella <- list()
     
     for( i in levels(dato_dish_ba_aggr$dataset) ){
+      
       k <- k + 1
       
       list_tab <- list(total_count_across_model = i,
@@ -1797,8 +1902,10 @@ for( cartel in cartels ){
     tabella_loas
     
     if(doouts == 9999){
+      
       cat("...printing table of Out-of-LOAS dishes only...")
-      save_as_docx(tabella_loas, path = paste0("./tables/table_descriptive-outLOAs.docx"))
+      save_as_docx(tabella_loas, path = paste0("./tables/Table_descriptive-outLOAs.docx"))
+      
     }
     
     
@@ -1844,12 +1951,14 @@ for( cartel in cartels ){
     
     
     if(doouts == 9999){
+      
       cat("...printing table of Out-of-LOAS dishes with algorithm names...")
-      save_as_docx(tabella_outloas, path = paste0("./tables/table_mispredicted_focus-outLOAs.docx"))
+      save_as_docx(tabella_outloas, path = paste0("./tables/Table_mispredicted_focus-outLOAs.docx"))
+      
     }
     
     
-    # CREATING TABLE TO FOCUS ON THE COUPLE NUTRIENT * DATASET
+    ### CREATING TABLE TO FOCUS ON THE COUPLE NUTRIENT * DATASET ###
     test <- 
       dato_dish_ba_aggr %>%
       mutate(dataset = factor(dataset, labels = datsets_sorted),
@@ -1873,16 +1982,21 @@ for( cartel in cartels ){
     
     
     for(i in 1:nrow(test)){
+      
       test$filter3[i] = if_else(sum(c("3") %in% as.character(test[i, 1 + 1:n_righe]))  > 0, 1, 0)
       
       if(sum(as.character(test[i, 1 + 1:n_righe]) %in% "1")/length(na.omit(as.numeric(test[i, 1 + 1:n_righe]))) == 1){
+        
         test$filter1[i] = 1
+        
       }
       
       if(sum(as.character(test[i, 1 + 1:n_righe]) %in% "1") > 0){
+        
         test[i, 1 + which(test[i, 1 + 1:n_righe] == "1")] <- gsub(x = paste(as.character(test[i, 1 + which(test[i, 1 + 1:n_righe] == "1")]), temp[(temp$recipe_id == test$recipe_id[i])&(temp$total_count == 1), "model"], sep = "***"),
                                                                   pattern = "IN1k_", replacement = ""
         )
+        
         test$algorithm1[i] <- gsub(x = paste(sort(temp[(temp$recipe_id == test$recipe_id[i])&(temp$total_count == 1), "model"]), collapse = ", "),
                                    pattern = "IN1k_", replacement = ""
         )
@@ -1901,17 +2015,20 @@ for( cartel in cartels ){
     
     temp <- c(col_algorithm, datsets_sorted)
     for(k in 1:length(temp)){
+      
       test[, ncol(test) + 1] <- NA
       colnames(test)[length(test)] <- temp[k]
+      
     }
     
     
     for(i in 1:nrow(test)){
+      
       if(!is.na(test$algorithm1[i])){
+        
         temp <- unlist(strsplit(x = test$algorithm1[i], split = ", "))
-        for(j in temp){
-          test[i, j] <- 1
-        }
+        
+        for(j in temp){test[i, j] <- 1}
         
         temp <- test[i, 1 + which(!is.na(test[i, 1 + 1:n_righe]))]
         temp <- temp[str_detect(string = temp, pattern = "1" )]
@@ -1920,12 +2037,15 @@ for( cartel in cartels ){
           datsets_sorted[str_detect(string = paste(x = names(temp), collapse = ", "), pattern = datsets_sorted)]
         
         for( k in data_chosed){
+          
           test[i, k] <- paste(x = str_replace(string = temp[which( str_detect(string = names(temp), pattern = k) )],
                                               pattern = fixed("1***", ignore_case = TRUE), replacement = ""),collapse = ", "
           )
           
         }
+        
       }
+      
     }
     
     
@@ -1936,11 +2056,13 @@ for( cartel in cartels ){
     
     
     if(doouts == 9999){
+      
       cat("...creatin data with Out-of-LOAs mispredicted dishes")
       write.xlsx(x = dato_dish_aggr_focused, file = "./support_data/list_dish_complete_mispredicted_ba.xlsx")
+      
     }
     
-    # UNIQUE LIST OF MISPREDICTED DISHes ACCORDING TO LoAs
+    ### UNIQUE LIST OF MISPREDICTED DISHes ACCORDING TO LoAs ###
     unique_dishes_outloas <- unique(subset(dato_dish_ba_aggr, dato_dish_ba_aggr$total_count_across_model > 2)$recipe_id)
     
     
@@ -1958,9 +2080,11 @@ for( cartel in cartels ){
     s2 <- 1
     
     for( i in n_data ){
+      
       s <- s + 1
       
       for( j in datsets ){
+        
         k <- k + 1
         
         dato_dish_quantile[[k]] <- clean_names(read.xlsx(xlsxFile = paste0("./support_data/",i), sheet =  j))
@@ -1976,11 +2100,11 @@ for( cartel in cartels ){
       
     }
     
-    # aggregated data
+    ### aggregated data ###
     dato_dish_quantile_aggr <-
       bind_rows(dato_dish_quantile_aggr) %>%
       arrange(recipe_id) %>%
-      mutate(nutrient = factor(nutrient, levels = gsub(x = nutrients_sorted, pattern = "_gt", replacement = ""), labels = nutrients_names_sorted),
+      mutate(nutrient = factor(nutrient, levels = gsub(x = nutrients_sorted, pattern = "_gt", replacement = ""), labels = paste(nutrients_names_sorted, unit_nutrients_sorted)),
              dataset = factor(dataset, levels = datsets_sorted, labels = data_names_sorted)
       )
     
@@ -1988,7 +2112,7 @@ for( cartel in cartels ){
     write.xlsx(x = dato_dish_quantile_aggr, file = "./support_data/dishes_quantile_complete.xlsx")
     
     
-    # CREATING THE LIST OF OUT-of-95th QUANTILE DISHes
+    ### CREATING THE LIST OF OUT-of-95th QUANTILE DISHes ###
     dato_dish_quantile <- list() # >95th-quantile list by nutrient (xlsx file) and dataset (sheet)
     dato_dish_quantile_aggr <- list() # final list
     
@@ -2001,9 +2125,11 @@ for( cartel in cartels ){
     s2 <- 1
     
     for( i in n_data ){
+      
       s <- s + 1
       
       for( j in datsets ){
+        
         k <- k + 1
         
         dato_dish_quantile[[k]] <- clean_names(read.xlsx(xlsxFile = paste0("./support_data/",i), sheet =  j))
@@ -2021,11 +2147,11 @@ for( cartel in cartels ){
     }
     
     
-    # JOINED DATASET WITH PLATEs OUTSIDE THE LOAs AGGREGATED ACROSS DATASET
+    ### JOINED DATASET WITH PLATEs OUTSIDE THE LOAs AGGREGATED ACROSS DATASET ###
     dato_dish_quantile_aggr <- 
       bind_rows(dato_dish_quantile_aggr) %>%
       arrange(recipe_id) %>%
-      mutate(nutrient = factor(nutrient, levels = gsub(x = nutrients_sorted, pattern = "_gt", replacement = ""), labels = nutrients_names_sorted),
+      mutate(nutrient = factor(nutrient, levels = gsub(x = nutrients_sorted, pattern = "_gt", replacement = ""), labels = paste(nutrients_names_sorted, unit_nutrients_sorted)),
              dataset = factor(dataset, levels = datsets_sorted, labels = data_names_sorted)
       ) %>%
       group_by_at(.vars = c("recipe_id", "dataset", "num_ingr_per_dish", "nutrient", "total_count")) %>%              # aggregate across models: by aggregating results over models, you may observe how estimates vary by dataset (interest for datascience of nutrition) while
@@ -2041,11 +2167,12 @@ for( cartel in cartels ){
     head(dato_dish_quantile_aggr, n  = 20)
     
     
-    # table of out of 95%-quantile
+    ### table of out of 95%-quantile ###
     k <- 0
     tabella <- list()
     
     for(i in levels(dato_dish_quantile_aggr$dataset)){
+      
       k <- k + 1
       
       list_tab <- list(total_count_across_model = i,
@@ -2085,10 +2212,12 @@ for( cartel in cartels ){
     tabella_quantile <- tbl_stack(tabella) %>% as_flex_table()
     tabella_quantile
     
-    #not print with != c(0, 1)
+    
     if(doouts == 9999){
+      
       cat("...printing table with out-of 95%quantile mispredicted dishes")
-      save_as_docx(tabella_quantile, path = paste0("./tables/table_descriptive-out95.docx"))
+      save_as_docx(tabella_quantile, path = paste0("./tables/Table_descriptive-out95.docx"))
+      
     }
     
     
@@ -2096,6 +2225,7 @@ for( cartel in cartels ){
     tabella <- list()
     
     for(i in levels(dato_dish_quantile_aggr$dataset)){
+      
       k <- k + 1
       
       list_tab <- list(total_count_across_model = i,
@@ -2132,14 +2262,16 @@ for( cartel in cartels ){
     tabella_outquantile <- tbl_stack(tabella) %>% as_flex_table()
     tabella_outquantile
     
-    #not print with != c(0, 1)
+    
     if(doouts == 9999){
+      
       cat("...printing table with out-of 95%quantile mispredicted dishes with algorithm names...")
-      save_as_docx(tabella_outquantile, path = paste0("./tables/table_focus-out95.docx"))
+      save_as_docx(tabella_outquantile, path = paste0("./tables/Table_focus-out95.docx"))
+      
     }
     
     
-    # CREATING TABLE TO FOCUS ON THE COUPLE NUTRIENT * DATASET
+    ### CREATING TABLE TO FOCUS ON THE COUPLE NUTRIENT * DATASET ###
     test <- 
       dato_dish_quantile_aggr %>%
       mutate(dataset = factor(dataset, labels = datsets_sorted),
@@ -2163,13 +2295,17 @@ for( cartel in cartels ){
     
     
     for(i in 1:nrow(test)){
+      
       test$filter3[i] = if_else(sum(c("3") %in% as.character(test[i, 1 + 1:n_righe]))  > 0, 1, 0)
       
       if(sum(as.character(test[i, 1 + 1:n_righe]) %in% "1")/length(na.omit(as.numeric(test[i, 1 + 1:n_righe]))) == 1){
+        
         test$filter1[i] = 1
+        
       }
       
       if(sum(as.character(test[i, 1 + 1:n_righe]) %in% "1") > 0){
+        
         test[i, 1 + which(test[i, 1 + 1:n_righe] == "1")] <- gsub(x = paste(as.character(test[i, 1 + which(test[i, 1 + 1:n_righe] == "1")]), temp[(temp$recipe_id == test$recipe_id[i])&(temp$total_count == 1), "model"], sep = "***"),
                                                                   pattern = "IN1k_", replacement = ""
         )
@@ -2184,18 +2320,22 @@ for( cartel in cartels ){
     
     
     temp <- c(col_algorithm, datsets_sorted)
+    
     for(k in 1:length(temp)){
+      
       test[, ncol(test) + 1] <- NA
       colnames(test)[length(test)] <- temp[k]
+      
     }
     
     
     for(i in 1:nrow(test)){
+      
       if(!is.na(test$algorithm1[i])){
+        
         temp <- unlist(strsplit(x = test$algorithm1[i], split = ", "))
-        for(j in temp){
-          test[i, j] <- 1
-        }
+        
+        for(j in temp){test[i, j] <- 1}
         
         temp <- test[i, 1 + which(!is.na(test[i, 1 + 1:n_righe]))]
         temp <- temp[str_detect(string = temp, pattern = "1" )]
@@ -2204,12 +2344,15 @@ for( cartel in cartels ){
           datsets_sorted[str_detect(string = paste(x = names(temp), collapse = ", "), pattern = datsets_sorted)]
         
         for( k in data_chosed){
+          
           test[i, k] <- paste(x = str_replace(string = temp[which( str_detect(string = names(temp), pattern = k) )],
                                               pattern = fixed("1***", ignore_case = TRUE), replacement = ""),collapse = ", "
           )
           
         }
+        
       }
+      
     }
     
     
@@ -2218,11 +2361,11 @@ for( cartel in cartels ){
       rename_with(~ paste0(., "_1alg"), any_of(datsets_sorted)) %>%
       relocate(any_of(col_order2), .after = "ingredients")
     
-    # UNIQUE LIST OF MISPREDICTED DISHes ACCORDING TO 95th-QUANTILE
+    ### UNIQUE LIST OF MISPREDICTED DISHes ACCORDING TO 95th-QUANTILE ###
     unique_dishes_quantile <- unique(subset(dato_dish_quantile_aggr, dato_dish_quantile_aggr$total_count_across_model > 2)$recipe_id)
     
     
-    # intersectio across lists (out-of-LOAs && 95pct) by the two methods (filter on the list and filter on the algorithm)
+    ### intersectio across lists (out-of-LOAs && 95pct) by the two methods (filter on the list and filter on the algorithm) ###
     unique_mispredicted_dishes <- list()
     unique_mispredicted_dishes[[1]] <- intersect(x = dato_dish_aggr_focused[dato_dish_aggr_focused$filter3 == 1, "recipe_id"], y = dish_list_quantile_aggr_focused[dish_list_quantile_aggr_focused$filter3 == 1, "recipe_id"])
     unique_mispredicted_dishes[[2]] <- intersect(x = unique_dishes_outloas, y = unique_dishes_quantile)
@@ -2233,11 +2376,12 @@ for( cartel in cartels ){
     mispred_reportino3 <- dato_dish_ba_aggr[dato_dish_ba_aggr$recipe_id %in% unique_mispredicted_dishes, ]
     
     
-    # tabella piatti fuori dai LoAs e >95%
+    ### tabella piatti fuori dai LoAs e >95% ###
     k <- 0
     tabella <- list()
     
     for( i in levels(mispred_reportino3$dataset) ){
+      
       k <- k + 1
       
       list_tab <- list(total_count_across_model = i,
@@ -2298,7 +2442,7 @@ for( cartel in cartels ){
         addWorksheet(wb = wb, sheetName = "reportino2_list_unique_dishes")
         writeData(wb = wb, sheet = "reportino2_list_unique_dishes", x = mispred_reportino2, startRow = 1, startCol = 1)
         
-        save_as_docx(tabella_mispredicted, path = paste0("./tables/table_mispredicted_ba_95pct.docx"))
+        save_as_docx(tabella_mispredicted, path = paste0("./tables/Table_mispredicted_ba_95pct.docx"))
         
       }
       
@@ -2373,19 +2517,21 @@ for( cartel in cartels ){
     pivot_longer(everything(), names_sep='_pred_', names_to=c('.value', 'statistics')) 
   
   
-  tabella %>% regulartable() %>% autofit()
+  tabella %>% flextable %>% autofit
   
   tabella2 <- tabella[, c("statistics", top_ingr)]
   
-  tabella <- tabella %>% regulartable() %>% autofit()
+  tabella <- tabella %>% flextable %>% autofit
   
-  tabella2 <- tabella2 %>% regulartable() %>% autofit()
+  tabella2 <- tabella2 %>% flextable %>% autofit
   
   
   if(doouts == 9999){
+    
     cat("...printing tables with mean-probabilities of all and top30 ingredients across 5 runs...")
     save_as_docx(tabella, path = paste0("./tables/table-meanprobs.docx"))  
     save_as_docx(tabella2, path = paste0("./tables/table-meanprobs_top30.docx"))  
+  
   }    
   
   
@@ -2442,19 +2588,21 @@ for( cartel in cartels ){
   head(df_fin_reportino3_ingr[righe, c("recipe_id", "ingredients")])
   
   
-  temp <- df_fin_reportino3_ingr %>% 
+  temp <- 
+    df_fin_reportino3_ingr %>% 
     filter(dataset == data_names_sorted[1] & model == "R101_2+2") %>%
     select(paste0(top_ingr, "_gt")) %>%
     mutate(across(contains("_gt"), ~ as.numeric(.) - 1))
   
   
-  temp <- data.frame(ingredient = factor(top_ingr, levels = top_ingr, labels = firstup(gsub(x = top_ingr, pattern = "_", replacement = " "))),
-                     perc = 100 * as.numeric(colMeans(temp))
+  temp <-
+    data.frame(Ingredient = factor(top_ingr, levels = top_ingr, labels = firstup(gsub(x = top_ingr, pattern = "_", replacement = " "))),
+               perc = 100 * as.numeric(colMeans(temp))
   )
   
   p <-
     ggplot(data = temp) +
-    geom_bar(mapping = aes(y = perc, x = ingredient), stat = "identity", fill = "red4") +
+    geom_bar(mapping = aes(y = perc, x = Ingredient), stat = "identity", fill = "red4") +
     theme_minimal(base_size = 28) +
     scale_y_continuous(name = "Percentage of ingredients", n.breaks = 10, labels = scales::percent_format(scale = 1)) +
     theme(axis.text.x = element_text(size = 16, angle = 30, hjust = 1, vjust = 1.3),
@@ -2516,9 +2664,12 @@ for( cartel in cartels ){
   test2$dishes <- NA
   
   k <- 0
+  
   for (i in nomi_ingr) {
+    
     k <- k + 1
     test2[test2$ingredient %in% i, "dishes"] <- paste(unique(df_fin_reportino3[df_fin_reportino3[, paste0(i, "_gt") ] == 1, c("recipe_id")]), collapse = ", ")
+    
   }
   
   
@@ -2676,8 +2827,8 @@ for( cartel in cartels ){
   names(data_ingr_performance_list)[[ which( cartel == cartels ) ]] <- cartel
   
   if(doouts == 1){
-    cat("...creating data with single ingredients performances \n")
     
+    cat("...creating data with single ingredients performances \n")
     wb <- createWorkbook()
     addWorksheet(wb = wb, sheetName = "dataset wide")
     writeData(wb = wb, sheet = "dataset wide", x = ingr_performances, startRow = 1, startCol = 1)
@@ -2685,7 +2836,7 @@ for( cartel in cartels ){
   }
   
   
-  # ingredients with missing F1, count by dataset and ingredient
+  ### ingredients with missing F1, count by dataset and ingredient ###
   temp <- 
     ingr_performances %>% 
     filter( is.na(F1) ) %>%
@@ -2695,7 +2846,8 @@ for( cartel in cartels ){
   
   temp1 <- unique(temp$ingredient) # ingredienti univoci
   
-  temp2 <- # subset of ingredients which have the condition of missing over all models, by dataset
+  ### subset of ingredients which have the condition of missing over all models, by dataset ###
+  temp2 <-
     temp %>%
     filter(count == 3)
   
@@ -2710,7 +2862,8 @@ for( cartel in cartels ){
   temp[temp$ingredient %in% temp[which(!temp1 %in% temp2$ingredient),]$"ingredient", ]
   
   
-  unique_not_present_ingr <- ingr_performances %>%
+  unique_not_present_ingr <- 
+    ingr_performances %>%
     filter(dishes == "not present") %>%
     select(ingredient) %>%
     distinct(ingredient) %>%
@@ -2718,10 +2871,11 @@ for( cartel in cartels ){
   
   
   if(doouts == 1){
+    
     cat("...creating list of ingredients not present in the test set \n")
     addWorksheet(wb = wb, sheetName = "ingredients not in test set")
     writeData(wb = wb, sheet = "ingredients not in test set", x = unique_not_present_ingr, startRow = 1, startCol = 1)
-    #write.xlsx2(x = unique_not_present_ingr, file = "./support_data/ingr_dish_performances.xlsx", sheetName = "ingredients not in test set", append = T)
+    
   }
   
   
@@ -2751,7 +2905,7 @@ for( cartel in cartels ){
     paste(temp2[which(temp2$pizza_gt == 1), "recipe_id"], sep = "", collapse = ", ") == temp1$dishes # list of dishes were pizza is present = cell with list (should be true)
     
   }
-  ## ## end test ## ##
+  ## ## end test ## ##  ## ##  ## ##  ## ## 
   
   
   dish_ingr_performances <-
@@ -2768,7 +2922,9 @@ for( cartel in cartels ){
   
   
   if(doouts == 9999){
+    
     write.xlsx(x = dish_ingr_performances %>% filter(prediction != "TN"), file =  "./tables/ingr_dish_performances_long.xlsx")
+    
   }
   
   
@@ -2784,9 +2940,10 @@ for( cartel in cartels ){
   
   
   if(doouts == 9999){
+    
     addWorksheet(wb = wb, sheetName = "dataset long mediated")
     writeData(wb = wb, sheet = "dataset long mediated", x = dish_ingr_performances_median, startRow = 1, startCol = 1)
-    #write.xlsx2(x = dish_ingr_performances_median, file = "./support_data/ingr_dish_performances.xlsx", sheetName = "dataset long mediated", append = T)
+    
   }  
   
   
@@ -2802,12 +2959,12 @@ for( cartel in cartels ){
                    #Mean = ~mean(., na.rm = T),
                    #SD = ~sd(., na.rm = T)
                  )) %>%
-    pivot_longer(!c("ingredient", "dataset", "mispredicted"), names_to = 'metric', values_to = 'value') %>%
-    separate(metric, into = c("metrics", "statistics"), sep = "_median_")  %>%
-    as.data.frame()
+    pivot_longer(!c("ingredient", "dataset", "mispredicted"), names_to = 'metrics', values_to = 'value') %>%
+    separate(metrics, into = c("metrics", "statistics"), sep = "_median_") %>%
+    as.data.frame
   
   
-  temp <- dish_ingr_performances_metric[(dish_ingr_performances_metric$dataset == data_names_sorted[1]) & (dish_ingr_performances_metric$metric == "F1") & (dish_ingr_performances_metric$statistics == "Me"),]
+  temp <- dish_ingr_performances_metric[(dish_ingr_performances_metric$dataset == data_names_sorted[1]) & (dish_ingr_performances_metric$metrics == "F1") & (dish_ingr_performances_metric$statistics == "Me"),]
   temp <- temp[order(temp$value, decreasing = T), ]
   summary(temp$value)
   summary(temp[!temp$ingredient %in% unique_not_present_ingr$ingredient, "value"])
@@ -2821,8 +2978,10 @@ for( cartel in cartels ){
   
   
   if(doouts == 1){
+    
     cat("...creating data of mediated performances of ingredients \n")
     write.xlsx(x = dish_ingr_performances_metric, file = "./support_data/ingr_metric_performances.xlsx")
+    
   }
   
   
@@ -2832,13 +2991,14 @@ for( cartel in cartels ){
       mispredicted == 1,
       dishes != "non present") %>%
     group_by_at( c("ingredient", "recipe_id" , "dataset") ) %>%
-    slice(1) %>% as.data.frame()
+    slice(1) %>% as.data.frame
   
   
   if(doouts == 9999){
+    
     addWorksheet(wb = wb, sheetName = "mispredicted ingredients")
     writeData(wb = wb, sheet = "mispredicted ingredients", x = list_ingr_dish_mispredicted, startRow = 1, startCol = 1)
-    #write.xlsx2(x = list_ingr_dish_mispredicted, file = "./support_data/ingr_dish_performances.xlsx", sheetName = "mispredicted ingredients", append = T)
+    
   }
   
   unique_list_ingr_dish_mispredicted <- 
@@ -2848,16 +3008,18 @@ for( cartel in cartels ){
     as.data.frame()
   
   if(doouts == 1){
+    
     cat("...creating list of unique mispredicted dishes...\n")
     addWorksheet(wb = wb, sheetName = "list mispredicted ingredients")
     writeData(wb = wb, sheet = "list mispredicted ingredients", x = unique_list_ingr_dish_mispredicted, startRow = 1, startCol = 1)
-    #write.xlsx2(x = unique_list_ingr_dish_mispredicted, file = "./support_data/ingr_dish_performances.xlsx", sheetName = "list mispredicted ingredients", append = T)
+    
   }
   
   
 }
 
-# END OF THE CYCLE
+## ## END OF THE CYCLE ## ## ## ##
+
 
 setwd( paste(wd_main, wd_output_data, sep = "/") )
 
@@ -2865,57 +3027,49 @@ setwd( paste(wd_main, wd_output_data, sep = "/") )
   
   for( j in 1:length(cartels) ){
     
-    # contains data on target variables of dishes
+    ### contains data on target variables of dishes ###
     df_fin_reportino3_list[[j]]$scenario <- names(df_fin_reportino3_list)[j]
     
-    # contains info on ingredients predicted for each dishe
+    ### contains info on ingredients predicted for each dish ###
     df_fin_reportino3_ingr_list[[j]]$scenario <- names(df_fin_reportino3_ingr_list)[j]
     
-    # mispredicted list of dishes
+    ### mispredicted list of dishes ###
     mispred_reportino3_list[[j]]$scenario <- names(mispred_reportino3_list)[j]
     
-    # contains information on residuals of target variable by dish. Used for recalculate MAPE 
+    ### contains information on residuals of target variable by dish. Used for recalculate MAE% ### 
     dato_5runs_performances_list[[j]]$scenario <- names(dato_5runs_performances_list)[j] 
     
-    # information on aggregated metrics of target variable by dataset and algorithm
+    ### information on aggregated metrics of target variable by dataset and algorithm ###
     dato_5runs_perf_aggr_all_data[[j]]$scenario <- names(dato_5runs_perf_aggr_all_data)[j]
     
-    # information on ingredient detection and relative confusion matrices and performances, and matched info with dishes
-    # use data_ingr_performance_list for plots, conf_mat for single estimates
+    ### contains widths of Bland-Altman plots ###
+    ba_bias_all_data[[j]]$scenario <- names(ba_bias_all_data)[j]
+    
+    ### information on ingredient detection and relative confusion matrices and performances, and matched info with dishes
+    ### use data_ingr_performance_list for plots, conf_mat for single estimates ###
     conf_matrix_list[[j]]$scenario <- names(conf_matrix_list)[j]
     data_ingr_performance_list[[j]]$scenario <- names(data_ingr_performance_list)[j]
     
-    # information on aggregated metrics of ingredient by dataset and algorithm
+    ### information on aggregated metrics of ingredient by dataset and algorithm ###
     dish_ingr_performances_metric_all_data[[j]]$scenario <- names(dish_ingr_performances_metric_all_data)[j]
     
   }
   
-  # needed to create table of frames (table_2)
+  ### needed to create table of frames (table_2) ###
   training_dishes <- unique(dato_training_set$recipe_id)
   testing_dishes <- unique(bind_rows(df_fin_reportino3_list)$recipe_id)
   
-  # sorting frame filtering scenarios for plots
+  ### sorting frame filtering scenarios for plots ###
   list_ff_order <- setNames( paste(c("After", "Before"), "frame filtering"), cartels )
   list_ff_order <- rev(list_ff_order)
   
 }
 
-#save.image(file = "reportino3_after_prediction_ingr_w-comments.RData")
-
-'
-{
-### RUN TO START FROM THIS POINT
-  wd_main = "C:/Users/ASUS/Desktop/Milano/reportino3"
-  wd_output_data = "output_data"
-  
-  setwd( paste(wd_main, wd_output_data, sep = "/") )
-  
-  load(file = "reportino3_after_prediction_ingr_w-comments.RData")
-}
-'
+#save.image(file = "reportino3_after_cycles.RData")
 
 
-#### 4 - INGREDIENTs PERFORMANCE by FRAME FILTERING scenario ####
+
+#### 4 - INGREDIENTs PERFORMANCE by FRAME FILTERING scenario [just below the END OF THE CYCLE] ####
 
 if(doouts == 1){
   
@@ -2932,6 +3086,7 @@ if(doouts == 1){
 
 
 ##### 4a - ingredients predictions by dataset and frame filtering scenario #####
+
 df_fin_reportino3_ingr_list <- 
   df_fin_reportino3_ingr_list %>% 
   bind_rows() %>%
@@ -2941,7 +3096,7 @@ df_fin_reportino3_ingr_list <-
          scenario = factor(scenario, levels = names(list_ff_order), labels = as.character(list_ff_order))
   )
 
-#table of predicted number of ingredients
+### table of predicted number of ingredients ###
 tabella <-list()
 
 temp <- 
@@ -2967,7 +3122,7 @@ tabella[[1]] <-
       italicize_levels() %>%
       modify_header(all_stat_cols() ~ "**{level}**")
   ) %>%
-  modify_header(label = "**Metric**") %>%
+  modify_header(label = "**Median (IQR)**") %>%
   modify_footnote(everything() ~ NA)
 
 tabella[[2]] <-
@@ -2977,28 +3132,29 @@ tabella[[2]] <-
   tbl_strata(
     strata = scenario,
     .tbl_fun = ~ .x %>%
-      tbl_continuous(
-        variable = value,
-        by = dataset,
-        statistic = list(everything() ~ "{median} ({p25}, {p75})"),
-        digits = list(everything() ~ 0)
+      tbl_continuous(variable = value,
+                     by = dataset,
+                     statistic = list(everything() ~ "{median} ({p25}, {p75})"),
+                     digits = list(everything() ~ 0)
       ) %>%
+      modify_header(label = "**Median (IQR)**") %>%
       bold_labels() %>%
       italicize_levels() %>%
       modify_header(all_stat_cols() ~ "**{level}**")
   ) %>%
-  modify_header(label = "**Metric**") %>%
   modify_footnote(everything() ~ NA)
 
-tabella <- tbl_stack(tabella) %>% as_flex_table()
+tabella <- tbl_stack(tabella) %>% as_flex_table
 
 if(doouts == 1){
+  
   cat("...printing table S1 of the distribution of the predicted number of ingredient...")
-  save_as_docx(x = tabella, path = "./tables/table_s1_predicted-number-ingredients.docx")
+  save_as_docx(x = tabella, path = "./tables/Table_s1_predicted-number-ingredients.docx")
+  
 }
 
 
-# plot of residual vs actual number of ingredients
+### plot of residual vs actual number of ingredients ###
 q <-   
   ggplot(data = df_fin_reportino3_ingr_list, mapping = aes(x = num_ingr_per_dish)) +
   geom_jitter(data = df_fin_reportino3_ingr_list, mapping = aes(y = somma_diff, col = model)) +
@@ -3025,7 +3181,7 @@ if(doouts == 1){
   par(mar = c(0, 0, 0, 0))
   
   ggsave2(
-    filename = paste0("./figures/figure_1_ingredients-scenarios.pdf"),
+    filename = paste0("./figures/Figure_2_ingredients-scenarios.pdf"),
     plot = q,
     width = 16, height = 10,
     scale = 2,
@@ -3041,7 +3197,7 @@ if(doouts == 1){
 
 ##### 4b - performances of ingredients #####
 
-# ingredient matrix
+### ingredient matrix ###
 conf_matrix_list <-
   conf_matrix_list %>%
   bind_rows() %>%
@@ -3053,7 +3209,7 @@ conf_matrix_list <-
   relocate(scenario, .after = model) %>% as.data.frame()
 
 
-# table with F1s
+### table with F1s ###
 tabella_all_f1_num <- list()
 tabella <- list()
 s <- 0
@@ -3064,6 +3220,7 @@ for(i in levels(conf_matrix_list$scenario)){
   s <- s + 1
   
   for(j in levels(conf_matrix_list$dataset)){
+    
     k <- k + 1
     
     temp <- conf_matrix_list %>%
@@ -3089,22 +3246,26 @@ for(i in levels(conf_matrix_list$scenario)){
       modify_header(label = "**Dataset and ingredient**") %>%
       modify_footnote(~NA)
     
-    for(m in names(tabella[[k]]$table_body)[str_detect(string = names(tabella[[k]]$table_body), pattern = "stat")]){
-      temp2 <- apply(tabella[[k]]$table_body[ -1, m], 1, as.numeric)
-      temp2[is.na(temp2)] <- "NaN_R"
-      temp2[temp2 == 0] <- "NaN_W"
-      temp2[ ! (temp2 %in% c("NaN_R", "NaN_W")) ] <- format(as.numeric(temp2[ ! (temp2 %in% c("NaN_R", "NaN_W")) ]), nsmall = 2)
-      tabella[[k]]$table_body[ -1, m] <- temp2
+    temp2 <- names(tabella[[k]]$table_body)[str_detect(string = names(tabella[[k]]$table_body), pattern = "stat")]
+    
+    for(m in temp2){
+      
+      temp3 <- apply(tabella[[k]]$table_body[ -1, m], 1, as.numeric)
+      temp3[is.na(temp3)] <- "NaN_R"
+      temp3[temp3 == 0] <- "NaN_W"
+      temp3[ ! (temp3 %in% c("NaN_R", "NaN_W")) ] <- format(as.numeric(temp3[ ! (temp3 %in% c("NaN_R", "NaN_W")) ]), nsmall = 2)
+      tabella[[k]]$table_body[ -1, m] <- temp3
+      
     }
     
   }
   
   tabella_all_f1_num[[s]] <- tbl_stack(tabella[(k - (length(data_names)- 1)):k]) 
   
-} # later on the table is completed and possibly put into output !!!(DO NOT REWRITE THE 's' PARAMETER)
+} #...! later on the table is completed and possibly put into output !!!(DO NOT REWRITE THE 's' PARAMETER) #
 
 
-## dataset of F1 scores (continuous and categorical) from single ingredients
+### dataset of F1 scores (continuous and categorical) from single ingredients ###
 data_ingr_performance_list <-
   data_ingr_performance_list %>%
   bind_rows() %>%
@@ -3133,7 +3294,7 @@ data_ingr_performance_list <-
   as.data.frame()
 
 
-# delta% of F1 score over singles ingredients
+### delta% of F1 score over singles ingredients ###
 for (r in (data_ingr_performance_list$ingredient)) {
   
   for (j in levels(data_ingr_performance_list$dataset)) {
@@ -3151,14 +3312,15 @@ for (r in (data_ingr_performance_list$ingredient)) {
       temp2 <- data_ingr_performance_list[righe & data_ingr_performance_list$scenario == levels(data_ingr_performance_list$scenario)[2], "F1_0.2_0.8"]  
       
       
-      data_ingr_performance_list[righe2, "delta_cat"] <- case_when(temp1 == "Ind_right" & temp2 == "Ind_right" ~ "Const_R",
-                                                                   temp1 == "Ind_right" & temp2 == "Ind_wrong" ~ "DOWN",
-                                                                   temp1 == "Ind_wrong" & temp2 == "Ind_right" ~ "UP",
-                                                                   temp1 == "Ind_wrong" & temp2 == "Ind_wrong" ~ "Const_W",
-                                                                   temp1 == "Ind_wrong" & !( temp2 %in% c ("Ind_right", "Ind_wrong") ) ~ "UP",
-                                                                   !( temp1 %in% c ("Ind_right", "Ind_wrong") ) & ( temp2 == "Ind_wrong" ) ~ "DOWN",
-                                                                   !( temp1 %in% c ("Ind_right", "Ind_wrong") ) & !( temp2 %in% c ("Ind_right", "Ind_wrong") ) ~ "REAL"
-      )
+      data_ingr_performance_list[righe2, "delta_cat"] <- 
+        case_when(temp1 == "Ind_right" & temp2 == "Ind_right" ~ "Const_R",
+                  temp1 == "Ind_right" & temp2 == "Ind_wrong" ~ "DOWN",
+                  temp1 == "Ind_wrong" & temp2 == "Ind_right" ~ "UP",
+                  temp1 == "Ind_wrong" & temp2 == "Ind_wrong" ~ "Const_W",
+                  temp1 == "Ind_wrong" & !( temp2 %in% c ("Ind_right", "Ind_wrong") ) ~ "UP",
+                  !( temp1 %in% c ("Ind_right", "Ind_wrong") ) & ( temp2 == "Ind_wrong" ) ~ "DOWN",
+                  !( temp1 %in% c ("Ind_right", "Ind_wrong") ) & !( temp2 %in% c ("Ind_right", "Ind_wrong") ) ~ "REAL"
+        )
       
     }
     
@@ -3166,13 +3328,14 @@ for (r in (data_ingr_performance_list$ingredient)) {
   
 }
 
-# continued: creation of performance table over single ingredients and relative delta%'s
+#...!continued: creation of performance table over single ingredients and relative delta%'s #
 s <- s + 1
 k <- 0
 
 tabella <- list()
 
 for(j in levels(data_ingr_performance_list$dataset)){
+  
   k <- k + 1
   
   temp <- data_ingr_performance_list %>%
@@ -3209,9 +3372,13 @@ for(j in levels(data_ingr_performance_list$dataset)){
     temp3 <- temp[temp$ingredient == i, "delta_cat"]
     
     for(m in 1:length(temp1)){
+      
       if( ! (temp3[m] == "REAL") ){
+        
         tabella[[k]]$table_body[ tabella[[k]]$table_body$label == i, temp1[m] ] <- temp3[m] 
+        
       }
+      
     }
     
   }
@@ -3223,12 +3390,14 @@ tabella_all_f1_num[[s]] <- tbl_stack(tabella[(k - (length(data_names)- 1)):k])
 tabella_all_f1_num <- tbl_merge(tabella_all_f1_num, tab_spanner = c("**Before frame filtering**", "**After frame filtering**", "**ΔF1 (%)**")) %>% as_flex_table
 
 if(doouts == 1){
+  
   cat("...printing tables S4 and S5 (to be split) of performance of single ingredients...\n")
-  save_as_docx(tabella_all_f1_num, path = "./tables/table_s4-s5_ingr_f1_performances.docx")
+  save_as_docx(tabella_all_f1_num, path = "./tables/Tables_s4-s5_ingr_f1_performances.docx")
+  
 }
 
 
-# plot of F1 metrics
+### plot of F1 metrics ###
 t <- 0
 point_level <- - 0.05
 
@@ -3301,7 +3470,7 @@ for (m in levels(data_ingr_performance_list$dataset)) {
   title_plot_y <-   
     ggplot() +
     theme_void() +
-    annotate("text", x = 0., y = 0.5, label = "F1 metrics", size = 7, hjust = 0.5, vjust = 0.5, angle = 90)
+    annotate("text", x = 0., y = 0.5, label = "F1 score", size = 7, hjust = 0.5, vjust = 0.5, angle = 90)
   
   q <- plot_grid(plotlist = list(title_plot_y, q), ncol = 2, rel_widths = c(0.03, 1))
   
@@ -3339,9 +3508,9 @@ for (m in levels(data_ingr_performance_list$dataset)) {
     par( mar = c(0, 0, 0, 0) )
     
     ggsave2(
-      filename = paste0("./figures/figure_s", 12 + t, "-ingr_performances.pdf"),
+      filename = paste0("./figures/Supfig_s", 12 + t, "_ingr-performances.pdf"),
       plot = q,
-      width = 24, height = 17,
+      width = 29.7, height = 17,
       scale = 2,
       units = c("cm"),
       dpi = 300,
@@ -3357,7 +3526,7 @@ for (m in levels(data_ingr_performance_list$dataset)) {
 
 p <- 
   ggplot(data_ingr_performance_list, aes(x = ingredient2, y = value, group = 1)) +
-  labs(x = "Ingredient", y = "F1 score") +
+  labs(x = "Ingredient", y = "F1-score") +
   geom_line() +
   geom_hline(yintercept = cutoff_low, lty = "dashed", color = "red4", size = 0.5) +
   geom_hline(yintercept = cutoff_up, lty = "dashed", color = "green4", size = 0.5) +
@@ -3377,7 +3546,7 @@ if(doouts == 9999){
   par( mar = c(0, 0, 0, 0) )
   
   ggsave2(
-    filename = paste0("./figures/plot-7-ingr_performances.pdf"),
+    filename = paste0("./figures/Supfig_X_ingr_performances.pdf"),
     plot = p,
     width = 30, height = 20,
     scale = 1.5,
@@ -3391,10 +3560,10 @@ if(doouts == 9999){
 }
 
 
-# table of aggregate F1 scores
+### table of aggregate F1 scores ###
 tabella <- 
   data_ingr_performance_list %>%
-  group_by(dataset, model, scenario) %>%
+  group_by(scenario, dataset, model) %>%
   filter(F1_0.2_0.8 %in% c("<0.2", "0.2<=x<=0.8", ">0.8" )) %>%
   summarise_at("value",     .funs = list(Min = ~ min(., na.rm = T),
                                          Q1 = ~ quantile(., 0.25, na.rm = T),
@@ -3404,53 +3573,43 @@ tabella <-
                                          Mean = ~ mean(., na.rm = T),
                                          SD = ~ sd(., na.rm = T)
   )
-  ) %>% 
-  pivot_longer(everything(), names_sep = ':', names_to = c('.value', 'statistics')) %>%
+  ) %>%
   mutate_if(is.numeric, ~ round(., 2)) %>%
-  regulartable() %>% autofit()
+  flextable %>% autofit
 tabella
 
 tabella_f1_num <- tabella
 
 
-# table of categorical F1 scores
+### table of categorical F1 scores ###
 tabella <-
   data_ingr_performance_list %>%
   select(ingredient:F1_0.2_0.8, scenario, delta, ingredient3)  %>%
   filter(F1_0.2_0.8 %in% c("<0.2", "0.2<=x<=0.8", ">0.8" )) %>%
-  group_by(across(c(
-    model,
-    dataset,
-    scenario,
-    F1_0.2_0.8
-  ))) %>%
+  group_by(scenario, dataset, model) %>%
   count() %>%
-  group_by(across(c(
-    model,
-    dataset,
-    scenario
-  ))) %>%
+  group_by(scenario, dataset, model) %>%
   mutate(n_tot = sum(n),
          n_pct = 100 * n/ n_tot
   ) %>%
   mutate_if(is.numeric, ~ round(., 2)) %>% 
-  pivot_longer(everything(), names_sep = ':', names_to = c('.value', 'statistics')) %>%
   mutate_if(is.numeric, ~ round(., 2)) %>%
-  regulartable() %>% autofit()
+  flextable %>% autofit
 tabella
 
 tabella_f1_cat <- tabella
 
 if(doouts == 1){
+  
   cat("...printing table 4 (sliced) of aggregate ingredient performance...")
-  save_as_docx(tabella_f1_cat, path = "./tables/table_4_f1-cat.docx")
-  save_as_docx(tabella_f1_num, path = "./tables/table_4_f1-num.docx")
+  save_as_docx(tabella_f1_cat, path = "./tables/Table_4_f1-cat.docx")
+  save_as_docx(tabella_f1_num, path = "./tables/Table_4_f1-num.docx")
+  
 }
 
 
-## delta F1 calculation:
-
-# table of improvement from delta F1 (categorical)
+### delta F1 calculation: ###
+### table of improvement from delta F1 (categorical)###
 tabella <-
   data_ingr_performance_list %>%
   filter(scenario == "After frame filtering" & delta_cat != "REAL") %>%
@@ -3458,15 +3617,10 @@ tabella <-
   mutate(delta_cat = as.factor(case_when(str_detect(delta_cat, "Const") ~ "No changes", T ~ delta_cat))) %>%
   group_by(across(c(model, dataset, delta_cat)), .drop = FALSE) %>%
   count() %>%
-  group_by(across(c(
-    model,
-    dataset
-  ))) %>%
+  group_by(dataset, model) %>%
   mutate(n_pct = 100 * n / length(unique(data_ingr_performance_list$ingredient)),
          across(where(is.numeric), .fns =~ round(., 2)) 
-  ) %>% 
-  pivot_longer(everything(), names_sep = ':', names_to = c('.value', 'statistics')) %>%
-  regulartable() %>% autofit()
+  ) %>% flextable %>% autofit
 tabella
 
 tabella_delta_f1_cat <- tabella
@@ -3492,20 +3646,23 @@ tabella <-
   ) %>% 
   pivot_longer(everything(), names_sep = ':', names_to = c('.value', 'statistics')) %>%
   mutate_if(is.numeric, ~ round(., 2)) %>%
-  regulartable() %>% autofit()
+  rename("delta_F1" = delta) %>%
+  flextable %>% autofit
 tabella
 
 tabella_delta_f1_num <- tabella
 
 
 if(doouts == 1){
+  
   cat("...printing table S3 (sliced) of deltas of ingredient performance...")
-  save_as_docx(tabella_delta_f1_cat, path = "./tables/table_3_delta-f1-cat.docx")
-  save_as_docx(tabella_delta_f1_num, path = "./tables/table_3_delta-f1-num.docx")
+  save_as_docx(tabella_delta_f1_cat, path = "./tables/Table_3_delta-f1-cat.docx")
+  save_as_docx(tabella_delta_f1_num, path = "./tables/Table_3_delta-f1-num.docx")
+  
 }
 
 
-# plot of Delta F1
+### plot of Delta F1 ###
 dish_ingr_performances_all_data_F1 <- 
   data_ingr_performance_list %>%
   filter((delta != "Inf") & !is.na(delta) ) %>%
@@ -3590,7 +3747,7 @@ if(doouts == 9999){
   par( mar = c(0, 0, 0, 0) )
   
   ggsave2(
-    filename = paste0("./figures/plot-8-ingr_performances.pdf"),
+    filename = paste0("./figures/Supfig_X_ex8_ingr_performances.pdf"),
     plot = q,
     width = 20, height = 14,
     scale = 2,
@@ -3654,8 +3811,10 @@ table_mispred_ingredients <-
 
 
 if(doouts == 1){
+  
   cat("...printing data for table S7 of  figure of  misclassified ingredients after frame filtering...\n")
-  write.xlsx(x = table_mispred_ingredients, file = "./tables/table_s7_misclass_ingr_after.xlsx")
+  write.xlsx(x = table_mispred_ingredients, file = "./tables/Table_s7_misclass_ingr_after.xlsx")
+  
 }
 
 
@@ -3681,10 +3840,15 @@ colnames(temp2) <- colnames(temp)[-1]
 row.names(temp2) <- colnames(temp)[-1]
 
 for(i in 1:nrow(temp2)){
+  
   for(j in 1:nrow(temp2)){
+    
     temp2[i, j] <- crossprod(x = temp[, i + 1], y = temp[, j + 1])
+    
   }
+  
 }
+
 
 coocc_obs <- as.data.frame(temp2)
 
@@ -3761,7 +3925,7 @@ if(doouts == 9999){
   par( mar = c(0, 0, 0, 0) )
   
   ggsave2(
-    filename = paste0("./support_data/rank_top_", n_ingr_to_show, "_", n_obs, "_ingr_cooccurrences.pdf"),
+    filename = paste0("./support_data/Support-figure_rank-top_", n_ingr_to_show, "_", n_obs, "_ingr_cooccurrences.pdf"),
     plot = p,
     width = 20, height = 14,
     scale = 2.6,
@@ -3835,7 +3999,7 @@ if(doouts == 1){
   dir.create("./tables/")
 }
 
-# nutrients predictions by datasets and scenarios
+### nutrients predictions by datasets and scenarios ###
 df_fin_reportino3_list <- 
   df_fin_reportino3_list %>% 
   bind_rows()  %>%
@@ -3877,7 +4041,7 @@ for(k in 1:5){
   
   temp_values <- cbind(temp_median, min = (1/1.05) * temp_segments$min)
   
-  y = nutrients_names_sorted[k]
+  y = paste(nutrients_names_sorted[k], unit_nutrients_sorted[k])
   
   q <-   
     ggplot(data = temp) +
@@ -3916,7 +4080,7 @@ for(k in 1:5){
     #par(mar = c(0, 0, 0, 0))
     
     ggsave2(
-      filename = paste0("./figures/supfig-s", k, "_", nutrients_sorted[k], "-scenarios.pdf"),
+      filename = paste0("./figures/Subfig_s", 2 + k, "_", nutrients_sorted[k], "-scenarios.pdf"),
       plot = q,
       width = 16, height = 10,
       scale = 2,
@@ -3934,7 +4098,7 @@ for(k in 1:5){
 
 ###### 5b - performances between publications ######
 
-# dataset of nutritional composition of single dishes from Bianco et al. 2025
+### dataset of nutritional composition of single dishes from Bianco et al. 2025 ###
 df_fin_reportino2_before <- 
   clean_names(read.csv(file = paste(wd_main, wd_input_data, "reportino2_rerun_3alg/data/df_fin_reportino2.csv", sep = "/"),
                        sep = ";", dec = ","
@@ -3952,7 +4116,8 @@ df_fin_reportino2_before <-
   ) %>%
   relocate(id, scenario, .before = recipe_id)
 
-# dataset of nutritional values in the current publication before frame filtering
+
+### dataset of nutritional values in the current publication before frame filtering ###
 df_fin_reportino3_before <-
   df_fin_reportino3_list %>%
   select(recipe_id:mass_gt) %>%
@@ -3966,13 +4131,12 @@ df_fin_reportino3_before <-
   relocate(id, scenario, .before = recipe_id)
 
 
-#dataset containing only predicted and observed values of single dishes over the two publications (vs B25)
+### dataset containing only predicted and observed values of single dishes over the two publications (vs B25) ###
 df_fin_reportino2.3_before_single_values <- merge( x = df_fin_reportino2_before, df_fin_reportino3_before, by = "id", suffixes = c("_r2", "_r3"))
 
 
-## calculating MAPE contribution of single dishes:
-
-# retrieving data of single performances from the current analysis
+### calculating MAE% contribution of single dishes:
+### retrieving data of single performances from the current analysis ###
 df_fin_reportino3_before <- 
   dato_5runs_performances_list %>%
   bind_rows() %>%
@@ -3989,16 +4153,16 @@ df_fin_reportino3_before <-
                      MAE = ~MAE(.)),
                 .names = "{.fn}_{.col}"),
          across(any_of(cols_abs),
-                list(MAPE = MAPE), .names = "{.fn}_{.col}")
+                list(`NAE%` = `MAE%`), .names = "{.fn}_{.col}")
   ) %>% 
   ungroup() %>%
   group_by(recipe_id, dataset, model) %>%
-  select(c(recipe_id, model, dataset, contains("MAPE"))) %>%
+  select(c(recipe_id, model, dataset, contains("NAE%"))) %>%
   summarise(across(where(is.numeric), ~ mean(.x, na.rm = TRUE))) %>%
   mutate(scenario = "Reportino3_before") %>%
   relocate(scenario, .after = model)
 
-#  retrieving data of single performances from Biano et al. 2025
+### retrieving data of single performances from Biano et al. 2025 ###
 df_fin_reportino2_before <- 
   read.xlsx(xlsxFile = paste(wd_main, wd_input_data, "reportino2_rerun_3alg/data/dishes_single_performances.xlsx", sep = "/") ) %>%
   select(recipe_id, dataset, model, contains( c("pred_res", "pred_abs") )) %>%
@@ -4008,11 +4172,12 @@ df_fin_reportino2_before <-
   mutate( dataset = factor(dataset, levels = datsets_sorted, labels = data_names_sorted),
           model = gsub(x = model, pattern = "_IN1k", replacement = "")
   ) %>%
-  select(c(recipe_id, model, dataset, contains("MAPE"))) %>%
+  select(c(recipe_id, model, dataset, contains("MAPE"))) %>% # OLD WORDING for 'NAE%' in Bianco 2025
   mutate(scenario = "Reportino2_before") %>%
+  rename_at(vars(starts_with("MAPE")), .funs = ~ gsub(., pattern = "MAPE", replacement = "NAE%")) %>%
   relocate(names(df_fin_reportino3_before))
 
-# all data
+### all data ###
 df_fin_reportino2.3_before <- 
   bind_rows(df_fin_reportino2_before,
             df_fin_reportino3_before
@@ -4022,10 +4187,10 @@ df_fin_reportino2.3_before <-
 names(df_fin_reportino2.3_before)
 
 
-# creating residuals of MAPEs: res_MAPE = MAPE_reportino3 - MAPE_reportino2
+### creating residuals of MAPEs: res_MAPE = MAPE_reportino3 - MAPE_reportino2 ###
 for(i in 1:5){
   
-  nomi_temp <- paste0("res_", substr(x = names(df_fin_reportino2.3_before)[4 + i], start = 1, stop = 8))
+  nomi_temp <- paste0("d_", substr(x = names(df_fin_reportino2.3_before)[4 + i], start = 1, stop = 8))
   cat(nomi_temp, "\n")
   
   df_fin_reportino2.3_before[, ncol(df_fin_reportino2.3_before) + 1] <- NA
@@ -4056,8 +4221,8 @@ for(i in 1:5){
 tabella <-  
   df_fin_reportino2.3_before %>%
   filter(scenario == "Reportino3_before") %>%
-  select(recipe_id:model, contains("res"), -scenario) %>%
-  rename_at(vars(contains("res_MAPE")), .funs = ~ gsub(., pattern = "res_MAPE_", replacement = "")) %>%
+  select(recipe_id:model, starts_with("d"), -scenario) %>%
+  rename_at(vars(contains("d_MAE%")), .funs = ~ gsub(., pattern = "d_NAE%_", replacement = "")) %>%
   pivot_longer(!(recipe_id:model), names_to = 'nutrient', values_to = "value") %>%
   group_by(dataset, model, nutrient) %>%
   summarise_at(.vars = "value", 
@@ -4073,23 +4238,25 @@ tabella <-
   mutate(nutrient = factor(nutrient, levels = substr(start = 1, stop = 3, x = nutrients_sorted), labels = nutrients_names_sorted)) %>%
   mutate_if(is.numeric, ~ round(., 2)) %>%
   arrange(dataset, model, nutrient) %>%
-  regulartable() %>% autofit()
+  flextable %>% autofit
 tabella
 
-table_MAPE_diff <- tabella  
+table_d_NAE_pct_diff <- tabella  
 
 if(doouts == 1){
-  cat("...printing table S10 of Delta MAPE distribution...\n")
-  save_as_docx(table_MAPE_diff, path = paste0("./tables/table_s10_deltaMAPE.docx"))  
+  
+  cat("...printing table S10 of Delta NAE% distribution...\n")
+  save_as_docx(table_d_NAE_pct_diff, path = paste0("./tables/Table_s10_delta-NAE_pct.docx"))
+  
 }
 
 
-###### 5ba - regressions for MAPEs between publications ######
+###### 5ba - regressions for d_NAE%'s between publications ######
 
 df_fin_reportino2.3_before_reg <-
   df_fin_reportino2.3_before %>%
   filter(scenario == "Reportino3_before") %>%
-  select(recipe_id:model, contains("res_MAPE") & !scenario) %>%
+  select(recipe_id:model, contains("d_NAE%") & !scenario) %>%
   merge(y = 
           df_nutrition5k %>%
           select(recipe_id:recipes) %>%
@@ -4107,16 +4274,17 @@ df_fin_reportino2.3_before_reg <-
           ),
         all.x = T, by = "recipe_id"
   ) %>%
-  mutate(across(contains("res_MAPE"), ~ abs(.x)),
+  mutate(across(contains("d_NAE%"), ~ abs(.x)),
          num_ingr_per_dish = as.factor(cut(num_ingr_per_dish, breaks = c(0, 1, 3, 9, max(num_ingr_per_dish, na.rm = T)))),
          model = factor(model, levels = c("R101_2+2", "ViT-B-16_2+2", "IncV3_2+2"))
-  )
+  ) %>%
+  rename_at(vars(contains("NAE%")), .funs = ~ gsub(., pattern = "NAE%", replacement = "NAE_pct"))
 
 
 i <- 1
 tabella <- list()
 
-regressors <- "~ dataset + model + num_ingr_per_dish #+ total_mass + (raw_cooked * recipes)"
+regressors <- "~ dataset + model + num_ingr_per_dish + total_mass + (raw_cooked * recipes)"
 
 varnames <- 
   list(
@@ -4128,7 +4296,7 @@ varnames <-
     "raw_cooked" = "Differencial use of raw/cooked ingredients"
   )
 
-for(k in paste("res_MAPE", substr(nutrients_sorted, start = 1, stop = 3), sep = "_")){
+for(k in paste("d_NAE_pct", substr(nutrients_sorted, start = 1, stop = 3), sep = "_")){
   
   i <- i + 1
   cat("Studying:", k, "\n")
@@ -4136,7 +4304,7 @@ for(k in paste("res_MAPE", substr(nutrients_sorted, start = 1, stop = 3), sep = 
   regressors2 <- regressors
   
   if(str_detect(string = k, pattern = "mas")){
-    regressors2 <- gsub(x = regressors, pattern = "total_mass +", replacement = "")
+    regressors2 <- gsub(x = regressors, pattern = "total_mass + ", replacement = "", fixed = T)
   }
   
   formula <- as.formula(paste(k, regressors2))
@@ -4160,7 +4328,7 @@ for(k in paste("res_MAPE", substr(nutrients_sorted, start = 1, stop = 3), sep = 
     rob_pval[j] <- p 
   }
   
-  # 95% CIs
+  ### 95% CIs ###
   cat("Coefficients from LRM: \n")
   lower <- as.numeric(coef(summaries)[,1]) - pnorm(q = 1 - p/2, mean = 0, sd = 1)*as.numeric(coef(summaries)[,2]); 
   upper <- as.numeric(coef(summaries)[,1]) + pnorm(q = 1 - p/2, mean = 0, sd = 1)*as.numeric(coef(summaries)[,2]); cbind(round(coef(mod), 2), round(lower, 2),round(upper, 2))
@@ -4214,21 +4382,24 @@ tabella[[1]] <-
 tabella_rlm <- tbl_merge(tabella, tab_spanner = c("N", nutrients_names_sorted)) %>% as_flex_table
 
 if(doouts == 9999){
+  
   cat("...printing support table of models...BE CAREFUL WITH p-VALUEs WHICH ARE NOT SUPPORTED BY THE ADOPTED PACKAGEs...\n")
-  save_as_docx(tabella_rlm, path = "./tables/table_RLM.docx")
+  save_as_docx(tabella_rlm, path = "./tables/Table_X_RLM.docx")
+  
 }
 
 
-##### 5bb - plot of MAPEs between publications #####
+##### 5bb - plot of NAE%'s between publications #####
+
 temp <- 
   df_fin_reportino2.3_before %>%
   select(recipe_id:model, contains("pred_abs")) %>%
-  rename_at(vars(contains("MAPE_")), .funs = ~ gsub(., pattern = "MAPE_", replacement = "")) %>%
+  rename_at(vars(contains("NAE%_")), .funs = ~ gsub(., pattern = "NAE%_", replacement = "")) %>%
   pivot_longer(!(recipe_id:model), names_to = 'nutrient', names_pattern = "(.*)_pred_abs$",
                values_to = "value"
   ) %>%
   group_by(dataset, model, nutrient, scenario) %>%
-  summarise(value = mean(value, na.rm = T)) %>%  #mean value is to obtain MAPE!
+  summarise(value = mean(value, na.rm = T)) %>%  #mean value is to obtain MAE%!
   mutate(nutrient = factor(nutrient, 
                            levels = gsub(x = nutrients_sorted, pattern = "_gt", replacement = ""), 
                            labels = nutrients_names_sorted)
@@ -4240,8 +4411,8 @@ temp <-
 
 temp1 <-
   df_fin_reportino2.3_before %>%
-  select(recipe_id:model, contains("res_")) %>%
-  rename_at(vars(contains("res_MAPE")), .funs = ~ gsub(., pattern = "res_MAPE_", replacement = "")) %>%
+  select(recipe_id:model, contains("d_NAE")) %>%
+  rename_at(vars(contains("d_NAE%")), .funs = ~ gsub(., pattern = "d_NAE%_", replacement = "")) %>%
   pivot_longer(!(recipe_id:model), names_to = 'nutrient',
                values_to = "value"
   ) %>%
@@ -4258,10 +4429,9 @@ temp1 <-
 
 temp <- merge(x = temp, y = temp1, all.x = T)
 
-# plot of percent differences in MAPE between the two pubblication, by dataset and algorithm
+### plot of percent differences in MAPE between the two pubblication, by dataset and algorithm ###
 {
   
-  "MAPE"
   k <- 0
   p <- list()
   lim_y <- max(temp$value) # fix limit for axis
@@ -4278,7 +4448,7 @@ temp <- merge(x = temp, y = temp1, all.x = T)
     
     p[[k]] <- 
       ggplot(temp[(temp$dataset == m), ], aes(x = model, y = value, fill = model)) +
-      labs(x = "Algorithm", y = "MAPE", fill = "Algorithm") +
+      labs(x = "Algorithm", y = "MAE%", fill = "Algorithm") +
       geom_col(position = position_dodge(0.55)) +
       scale_x_discrete(limits = rev, drop = F) +
       coord_flip() +
@@ -4309,7 +4479,7 @@ temp <- merge(x = temp, y = temp1, all.x = T)
   title_plot_x <-   
     ggplot() +
     theme_void() +
-    annotate("text", x = 0.5, y = 0.6, label = "MAPE", size = 7, hjust = 0.5, vjust = 0.5)
+    annotate("text", x = 0.5, y = 0.6, label = "MAE%", size = 7, hjust = 0.5, vjust = 0.5)
   
   p <- plot_grid(plotlist = list(p, title_plot_x), nrow = 2, rel_heights = c(1, 0.03))
   
@@ -4332,7 +4502,7 @@ if(doouts == 9999){
   par( mar = c(0, 0, 0, 0) )
   
   ggsave2(
-    filename = paste0("./figures/supfig_X_mape-rep_2_3_before.pdf"),
+    filename = paste0("./figures/Subfig_X_mae-pct_rep_2_3_before.pdf"),
     plot = p,
     width = 10, height = 6.5,
     scale = 4,
@@ -4346,24 +4516,27 @@ if(doouts == 9999){
 }
 
 
-# wilcoxon rank-sum test for residuals difference in reportino3 vs reportino2
+### wilcoxon rank-sum test for residuals difference in reportino3 vs reportino2
 table_wilk_diff <-
   df_fin_reportino2.3_before %>%
   filter(scenario == "Reportino3_before") %>%
   group_by(model, dataset) %>%
-  summarise(across(contains("res"), ~ wilcox.test(.)$p.value, .names = "{.col}")) %>%
+  summarise(across(contains("d_NAE"), ~ wilcox.test(.)$p.value, .names = "{.col}")) %>%
   mutate_if(is.numeric, ~ round(., 3))  %>%
-  regulartable() %>% autofit() 
+  flextable %>% autofit 
 
 if(doouts == 9999){
+  
   cat("...printing support table of p-values from Mann-Whitney test on MAPE difference between the current pubblication vs Bianco et al., 2025...\n")
-  save_as_docx(table_wilk_diff, path = paste0("./tables/table2_reportino2.3-wilcoxon.docx"))
+  save_as_docx(table_wilk_diff, path = paste0("./tables/Table_X_reportino2.3-wilcoxon.docx"))
+  
 }
 
 
-# support file: tables of difference of MAPE residuals reportino3 vs reportino2, before frame filtering by more groups
+### support file: tables of difference of MAPE residuals reportino3 vs reportino2, before frame filtering by more groups
 
-# you can focus on a subset of dishes by filtering by 'target dishes'
+### you can focus on a subset of dishes by filtering by 'target dishes'
+
 target_dishes <- c("dish_1558630325", "dish_1558720236", "dish_1562703447", "dish_1563389626", "dish_1566838351",
                    "dish_1563551194", "dish_1566316757", "dish_1566849987", "dish_1568146942", "dish_1563898084",
                    "dish_1563898084", "dish_1563551194")
@@ -4373,11 +4546,11 @@ table_target_dishes <-
   #filter( recipe_id %in% target_dishes ) %>%
   group_by(dataset, scenario, model) %>%
   select( 
-    #contains("res_MAPE"), # choose the variables to calculate statistics (residuals of MAPE rep3 vs rep2)
+    #contains("d_NAE%"), # choose the variables to calculate statistics (residuals of MAPE rep3 vs rep2)
     contains("pred"),    # choose the variables to calculate statistics (MAPEs of rep3, rep2) 
   ) %>%
-  rename_all(.funs = ~gsub(., pattern = "MAPE_|_pred_abs", replacement = "")) %>%
-  #rename_all(.funs = ~gsub(., pattern = "res_MAPE_", replacement = "")) %>% filter(scenario == "Reportino3_before") %>%
+  rename_all(.funs = ~gsub(., pattern = "NAE%_|_pred_abs", replacement = "")) %>%
+  #rename_all(.funs = ~gsub(., pattern = "d_NAE%_", replacement = "")) %>% filter(scenario == "Reportino3_before") %>%
   rename_all(.funs = ~gsub(., pattern = ":", replacement = "_")) %>%
   summarise_all(
     .funs = list(#Min = ~ min(., na.rm = T),
@@ -4391,40 +4564,43 @@ table_target_dishes <-
   ) %>% 
   pivot_longer(!c(dataset, model, scenario), names_sep = '_', names_to = c('.value', 'statistics')) %>%
   mutate_if(is.numeric, ~ round(., 2)) %>%
-  regulartable() %>% autofit()
+  flextable %>% autofit
 
 if(doouts == 9999){
+  
   cat("...printing support table of MAPE difference between the current pubblication vs Bianco et al., 2025 for a subset of dishes...\n")
   save_as_docx(table_target_dishes, path = paste0("./support_data/tableX_reportino2_3_before.docx"))  
+  
 }
 
 
 ##### 5bc - kernel densities #####
 
+df_fin_reportino2.3_before_d_nae_pct <-
+  df_fin_reportino2.3_before %>%
+  filter( scenario == "Reportino3_before" ) %>%
+  select(c(recipe_id, dataset, model, contains("d_NAE%"))) %>%
+  rename_with(.cols = any_of(contains("d_NAE%")), .fn = ~ gsub(., pattern = "d_NAE%_", replacement = "")) %>%
+  relocate(recipe_id, dataset, model, mas, cal, fat, pro, car) %>%
+  as.data.frame
+
 {
   
-  temp <-
-    df_fin_reportino2.3_before %>%
-    filter( scenario == "Reportino3_before" ) %>%
-    select(c(recipe_id, dataset, model, contains("res_MAPE"))) %>%
-    rename_with(~ gsub(., pattern = "res_MAPE_", replacement = ""), any_of(contains("res_MAPE"))) %>%
-    relocate(recipe_id, dataset, model, mas, cal, fat, pro, car) %>%
-    as.data.frame
-  
+  ### overall plots ###
   n_eps <- 6  
   n_dec <- 1
   custom_cols = c("red2","green4", "steelblue2","grey", "grey4")
   
   p <- list()
-  q <- list()
   
   for(j in 1:5){
     
-    minval = min(temp[,j + 3])
-    maxval = max(temp[,j + 3])
+    minval = min(df_fin_reportino2.3_before_d_nae_pct[,j + 3])
+    maxval = max(df_fin_reportino2.3_before_d_nae_pct[,j + 3])
     
-    temp_median <- temp %>%
-      summarise_at(.vars = vars(names(temp)[j + 3]), 
+    temp_median <- 
+      df_fin_reportino2.3_before_d_nae_pct %>%
+      summarise_at(.vars = vars(names(df_fin_reportino2.3_before_d_nae_pct)[j + 3]), 
                    .funs = list(me =~ median(.),
                                 q1 =~ quantile(., 0.25),
                                 q3 =~ quantile(., 0.75)
@@ -4436,18 +4612,20 @@ if(doouts == 9999){
     breaks = as.numeric(sort(c(0, breaks)))
     labels = as.character(round(breaks, n_dec))
     
-    dens_vals <- density(temp[[names(temp)[j + 3]]])
-    y_max <- max(dens_vals$y * length(temp[[1]]))
+    dens_vals <- density(df_fin_reportino2.3_before_d_nae_pct[[names(df_fin_reportino2.3_before_d_nae_pct)[j + 3]]])
+    y_max <- max(dens_vals$y * length(df_fin_reportino2.3_before_d_nae_pct[[1]]))
     
     p[[j]] <-
-      ggplot(data = temp, aes_string(x = names(temp)[j + 3])) +
+      ggplot(data = df_fin_reportino2.3_before_d_nae_pct, 
+             aes_string(x = names(df_fin_reportino2.3_before_d_nae_pct)[j + 3])
+      ) +
       geom_density(aes(y = after_stat(count)),
                    fill = custom_cols[j],
                    alpha = 0.3) +
       #geom_point(data = temp_median, mapping = aes(x = q1, y = 0), col = custom_cols[j], size = 1.5, shape = 17) + 
       geom_point(data = temp_median, mapping = aes(x = me, y = 0), col = custom_cols[j], size = 0.8, shape = 8) + 
       #geom_point(data = temp_median, mapping = aes(x = q3, y = 0), col = custom_cols[j], size = 1.5, shape = 13) + 
-      geom_vline(xintercept = 0, col = "red2", lty = "dashed", size = 0.5) + 
+      geom_vline(xintercept = 0, col = "red2", lty = "dashed", linewidth = 0.5) + 
       scale_x_continuous(limits = c(minval, maxval), breaks = breaks, labels = labels) + 
       scale_y_continuous(n.breaks = n_eps, expand = c(0.025, 0)) +
       coord_cartesian(ylim = c(0, y_max)) +
@@ -4459,13 +4637,21 @@ if(doouts == 9999){
   
   q <- plot_grid(plotlist = p, nrow = 1); q
   
+  title_plot_x <-   
+    ggplot() +
+    theme_void() +
+    annotate("text", x = 0.5, y = 0.6, label = expression(Delta~NAE), size = 3, hjust = 0.5, vjust = 0.5)
+  
+  q <- plot_grid(plotlist = list(q, title_plot_x), nrow = 2, rel_heights = c(1, 0.05))
+  
+  q
   
   if(doouts == 1){
     
     cat("...printing figure S16 of kernel density...\n")
     
     ggsave2(
-      filename = paste0("./figures/figure_s16_kernel_overall.pdf"),
+      filename = paste0("./figures/Supfig_s16_kernel_overall.pdf"),
       plot = q,
       width = 8, height = 5,
       scale = 2,
@@ -4479,28 +4665,27 @@ if(doouts == 9999){
   }
   
   
-  # by dataset
-  
+  ### distributions by dataset ###
   p <- list()
-  q <- list()
   
   for(j in 1:5){
     
-    temp_median <- temp %>%
-      select(c(dataset, names(temp)[j + 3])) %>%
+    temp_median <- 
+      df_fin_reportino2.3_before_d_nae_pct %>%
+      select(c(dataset, names(df_fin_reportino2.3_before_d_nae_pct)[j + 3])) %>%
       group_by(dataset) %>%
-      summarise_at(.vars = vars(names(temp)[j + 3]), 
+      summarise_at(.vars = vars(names(df_fin_reportino2.3_before_d_nae_pct)[j + 3]), 
                    .funs = list(me =~ median(.),
                                 q1 =~ quantile(., 0.25),
                                 q3 =~ quantile(., 0.75)
                    )
       )
     
-    minval = min(temp[,j + 3])
-    maxval = max(temp[,j + 3])
+    minval = min(df_fin_reportino2.3_before_d_nae_pct[,j + 3])
+    maxval = max(df_fin_reportino2.3_before_d_nae_pct[,j + 3])
     
-    dens_vals <- density(temp[[names(temp)[j + 3]]])
-    y_max <- max(dens_vals$y * length(temp[[1]]))
+    dens_vals <- density(df_fin_reportino2.3_before_d_nae_pct[[names(df_fin_reportino2.3_before_d_nae_pct)[j + 3]]])
+    #y_max <- max(dens_vals$y * length(df_fin_reportino2.3_before_d_nae_pct[[1]]))
     
     breaks = seq(minval, maxval, length.out = n_eps)
     breaks = breaks[- which.min(abs( breaks )) ]
@@ -4508,7 +4693,9 @@ if(doouts == 9999){
     labels = as.character(round(breaks, n_dec))
     
     p[[j]] <-
-      ggplot(data = temp, aes_string(x = names(temp)[j + 3], col = "dataset")) +
+      ggplot(data = df_fin_reportino2.3_before_d_nae_pct,
+             aes_string(x = names(df_fin_reportino2.3_before_d_nae_pct)[j + 3], col = "dataset")
+      ) +
       geom_density(aes(y = after_stat(count)), 
                    #size = 1.3
                    alpha = 0.2
@@ -4519,7 +4706,6 @@ if(doouts == 9999){
       geom_vline(xintercept = 0, col = "red2", lty = "dashed", size = 0.5) + 
       scale_x_continuous(limits = c(minval, maxval), breaks = breaks, labels = labels) + 
       scale_y_continuous(n.breaks = n_eps,  expand = c(0.025, 0)) + 
-      coord_cartesian(ylim = c(0, y_max)) +
       labs(x = nutrients_names_sorted[j], y = NULL) +
       theme_minimal(base_size = 5) +
       theme(axis.title.y = element_blank(),
@@ -4529,7 +4715,9 @@ if(doouts == 9999){
     
     legend <-
       get_legend(
-        ggplot(data = temp, aes_string(x = names(temp)[j + 3], fill = "dataset")) +
+        ggplot(data = df_fin_reportino2.3_before_d_nae_pct,
+               aes_string(x = names(df_fin_reportino2.3_before_d_nae_pct)[j + 3], fill = "dataset")
+          ) +
           geom_density(aes(y = after_stat(count)), 
                        #size = 1.3
                        #alpha = 0.2
@@ -4542,22 +4730,31 @@ if(doouts == 9999){
                 legend.key.size = unit(0.5, 'cm'), #change legend key size
                 legend.key.height = unit(0.5, 'cm'), #change legend key height
                 legend.key.width = unit(0.5, 'cm'), #change legend key width
-                legend.text = element_text(size = 6) #
+                legend.text = element_text(size = 8) #
           )
       )
     
   }
   
-  p <- plot_grid(plotlist = p, nrow = 1)
+  q <- plot_grid(plotlist = p, nrow = 1)
   
-  q <- plot_grid(plotlist = list(p, legend), nrow = 2, rel_heights = c(1, 0.05))  + theme(plot.margin = margin(0, 8, 0, 0)); q
+  title_plot_x <-   
+    ggplot() +
+    theme_void() +
+    annotate("text", x = 0.5, y = 0.6, label = expression(Delta~NAE), size = 3, hjust = 0.5, vjust = 0.5)
+  
+  q <- plot_grid(plotlist = list(q, title_plot_x), nrow = 2, rel_heights = c(1, 0.05))
+  
+  q <- plot_grid(plotlist = list(q, legend), nrow = 2, rel_heights = c(1, 0.05))  + theme(plot.margin = margin(0, 8, 0, 0)); q
+  
+  q
   
   if(doouts == 1){
     
     cat("...printing figure S17 of kernel density...\n")
     
     ggsave2(
-      filename = paste0("./figures/figure_s17_kernel_dataset.pdf"),
+      filename = paste0("./figures/Supfig_s17_kernel_dataset.pdf"),
       plot = q,
       width = 8, height = 5,
       scale = 2.,
@@ -4570,27 +4767,28 @@ if(doouts == 9999){
     
   }
   
-  # by algorithm
+  
+  ### distributions by algorithm ###
   p <- list()
-  q <- list()
   
   for(j in 1:5){
     
-    temp_median <- temp %>%
-      select(c(model, names(temp)[j + 3])) %>%
+    temp_median <- 
+      df_fin_reportino2.3_before_d_nae_pct %>%
+      select(c(model, names(df_fin_reportino2.3_before_d_nae_pct)[j + 3])) %>%
       group_by(model) %>%
-      summarise_at(.vars = vars(names(temp)[j + 3]), 
+      summarise_at(.vars = vars(names(df_fin_reportino2.3_before_d_nae_pct)[j + 3]), 
                    .funs = list(me =~ median(.),
                                 q1 =~ quantile(., 0.25),
                                 q3 =~ quantile(., 0.75)
                    )
       )
     
-    minval = min(temp[,j + 3])
-    maxval = max(temp[,j + 3])
+    minval = min(df_fin_reportino2.3_before_d_nae_pct[,j + 3])
+    maxval = max(df_fin_reportino2.3_before_d_nae_pct[,j + 3])
     
-    dens_vals <- density(temp[[names(temp)[j + 3]]])
-    y_max <- max(dens_vals$y * length(temp[[1]]))
+    dens_vals <- density(df_fin_reportino2.3_before_d_nae_pct[[names(df_fin_reportino2.3_before_d_nae_pct)[j + 3]]])
+    #y_max <- max(dens_vals$y * length(df_fin_reportino2.3_before_d_nae_pct[[1]]))
     
     breaks = seq(minval, maxval, length.out = n_eps)
     breaks = breaks[- which.min(abs( breaks )) ]
@@ -4598,7 +4796,9 @@ if(doouts == 9999){
     labels = as.character(round(breaks, n_dec))
     
     p[[j]] <-
-      ggplot(data = temp, aes_string(x = names(temp)[j + 3], col = "model")) +
+      ggplot(data = df_fin_reportino2.3_before_d_nae_pct,
+             aes_string(x = names(df_fin_reportino2.3_before_d_nae_pct)[j + 3], col = "model")
+      ) +
       geom_density(aes(y = after_stat(count)), 
                    #size = 1.3
                    alpha = 0.2
@@ -4618,7 +4818,9 @@ if(doouts == 9999){
     
     legend <-
       get_legend(
-        ggplot(data = temp, aes_string(x = names(temp)[j + 3], fill = "model")) +
+        ggplot(data = df_fin_reportino2.3_before_d_nae_pct,
+               aes_string(x = names(df_fin_reportino2.3_before_d_nae_pct)[j + 3], fill = "model")
+          ) +
           geom_density(aes(y = after_stat(count)), 
                        #size = 1.3
                        #alpha = 0.2
@@ -4631,22 +4833,31 @@ if(doouts == 9999){
                 legend.key.size = unit(0.5, 'cm'), #change legend key size
                 legend.key.height = unit(0.5, 'cm'), #change legend key height
                 legend.key.width = unit(0.5, 'cm'), #change legend key width
-                legend.text = element_text(size = 6) #
-          ) 
+                legend.text = element_text(size = 8) #
+          )
       )
     
   }
   
-  p <- plot_grid(plotlist = p, nrow = 1); p
+  q <- plot_grid(plotlist = p, nrow = 1); q
   
-  q <- plot_grid(plotlist = list(p, legend), nrow = 2, rel_heights = c(1, 0.05))  + theme(plot.margin = margin(0, 8, 0, 0)); q
+  title_plot_x <-   
+    ggplot() +
+    theme_void() +
+    annotate("text", x = 0.5, y = 0.6, label = expression(Delta~NAE), size = 3, hjust = 0.5, vjust = 0.5)
+  
+  q <- plot_grid(plotlist = list(q, title_plot_x), nrow = 2, rel_heights = c(1, 0.05))
+  
+  q <- plot_grid(plotlist = list(q, legend), nrow = 2, rel_heights = c(1, 0.05))  + theme(plot.margin = margin(0, 8, 0, 0)); q
+  
+  q
   
   if(doouts == 1){
     
     cat("...printing figure S18 of kernel density...\n")
     
     ggsave2(
-      filename = paste0("./figures/figure_s18_kernel_model.pdf"),
+      filename = paste0("./figures/Supfig_s18_kernel_model.pdf"),
       plot = q,
       width = 8, height = 5,
       scale = 2.,
@@ -4660,7 +4871,7 @@ if(doouts == 9999){
   }
   
   
-  # by dataset & algorithm
+  ### distributions by dataset & algorithm ###
   q <- list()
   
   for(k in 1:2){
@@ -4669,8 +4880,10 @@ if(doouts == 9999){
     
     for(j in 1:5){
       
-      temp_median <- temp %>%
-        filter(dataset == levels(dataset)[k]) %>%
+      temp <- df_fin_reportino2.3_before_d_nae_pct %>% filter(dataset == levels(dataset)[k])
+      
+      temp_median <- 
+        temp %>%
         select(c(model, names(temp)[j + 3])) %>%
         group_by(model) %>%
         summarise_at(.vars = vars(names(temp)[j + 3]), 
@@ -4732,7 +4945,7 @@ if(doouts == 9999){
     title_plot_y <-   
       ggplot() +
       theme_void() +
-      annotate("text", x = 0., y = 0.5, label = rev(data_names)[k], size = 4, hjust = 0.5, vjust = 0.5, angle = 90)
+      annotate("text", x = 0., y = 0.5, label = rev(data_names)[k], size = 3, hjust = 0.5, vjust = 0.5, angle = 90)
     
     q[[k]] <-
       plot_grid(plotlist = list(title_plot_y, p), ncol = 2, rel_widths = c(0.03, 1))
@@ -4741,14 +4954,23 @@ if(doouts == 9999){
   
   q <-  plot_grid(plotlist = q, nrow = 2)
   
+  title_plot_x <-   
+    ggplot() +
+    theme_void() +
+    annotate("text", x = 0.5, y = 0.6, label = expression(Delta~NAE), size = 3, hjust = 0.5, vjust = 0.5)
+  
+  q <- plot_grid(plotlist = list(q, title_plot_x), nrow = 2, rel_heights = c(1, 0.05))
+  
   q <-  plot_grid(plotlist = list(q, legend), nrow = 2, rel_heights = c(1, 0.05))  + theme(plot.margin = margin(0, 0, 0, 0)); q
+  
+  q
   
   if(doouts == 1){
     
     cat("...printing figure 5 of kernel density...\n")
     
     ggsave2(
-      filename = paste0("./figures/figure_5_kernel_dataset_algorithm.pdf"),
+      filename = paste0("./figures/Figure_5_kernel_dataset_algorithm.jpg"),
       plot = q,
       width = 8, height = 5,
       scale = 2.,
@@ -4764,14 +4986,14 @@ if(doouts == 9999){
 }
 
 
-##### 5c - MAPE comparison in the current analysis between frame filtering scenario, and by dataset #####
+##### 5c - MAE% comparison in the current analysis between frame filtering scenario, and by dataset #####
 
-# dishes performance  by datasets and scenarios
+### dishes performance  by datasets and scenarios ###
 dato_5runs_perf_aggr_all_data <-
   dato_5runs_perf_aggr_all_data %>%
   bind_rows() %>%
   filter(dataset %in% data_names_sorted) %>% 
-  group_by(nutrient, scenario, model, metric) %>%
+  group_by(nutrient, scenario, model, metrics) %>%
   mutate(dataset = factor(dataset, levels = data_names_sorted),
          scenario = factor(scenario, levels = names(list_ff_order), labels = as.character(list_ff_order)),
          model = factor(model, levels = model, labels = gsub(x = model, pattern = "IN1k_", replacement = "")),
@@ -4781,21 +5003,20 @@ dato_5runs_perf_aggr_all_data <-
   ) %>%
   mutate(dataset_scenario = factor(dataset_scenario, levels = as.vector(t(outer(data_names_sorted, list_ff_order, paste, sep = " \n "))))) %>%
   ungroup() %>%
-  group_by(nutrient, scenario, metric, dataset) %>%
+  group_by(nutrient, scenario, metrics, dataset) %>%
   mutate(point_level = median(value)) %>%
   ungroup() %>% distinct() %>% as.data.frame()
 
 
-# plots of performance over scenarios
-
+### plots of performance over scenarios ###
 {
   
   i <- 0
   q <- list()
   
-  for(k in 1:nlevels(dato_5runs_perf_aggr_all_data$metric)){
+  for(k in 1:nlevels(dato_5runs_perf_aggr_all_data$metrics)){
     
-    title_metric <- levels(dato_5runs_perf_aggr_all_data$metric)[k]             
+    title_metrics <- levels(dato_5runs_perf_aggr_all_data$metrics)[k]             
     
     for(s in 1:nlevels(dato_5runs_perf_aggr_all_data$nutrient)){
       
@@ -4805,29 +5026,41 @@ dato_5runs_perf_aggr_all_data <-
       
       title_target <- levels(dato_5runs_perf_aggr_all_data$nutrient)[s]
       
-      temp <- as.data.frame(subset(dato_5runs_perf_aggr_all_data, (dato_5runs_perf_aggr_all_data$metric == title_metric) & (dato_5runs_perf_aggr_all_data$nutrient == title_target))) 
+      temp <- as.data.frame(subset(dato_5runs_perf_aggr_all_data, (dato_5runs_perf_aggr_all_data$metrics == title_metrics) & (dato_5runs_perf_aggr_all_data$nutrient == title_target))) 
       
       
       lim2 <- 1.0 * max(temp$value)
       
       if( i <= 5){ 
+        
         title_target_set = element_text(size = 9)
         title_data_set = element_text(size = 8)
+      
       }else{
+        
         title_target_set = element_blank()
         title_data_set = element_blank()
+        
       }
       
       if( (i-1) %% 5 == 0){ 
-        title_metric_set = element_text(size = 10, hjust = 0.5, vjust = -2, face = "bold.italic")
+        
+        title_metrics_set = element_text(size = 10, hjust = 0.5, vjust = -2, face = "bold.italic")
+        
       }else{
-        title_metric_set = element_blank() 
+        
+        title_metrics_set = element_blank() 
+        
       }
       
       if(k == 3){
+        
         labelling = scales::percent_format(scale = 1) 
+        
       }else{
+        
         labelling = scales::number_format()
+        
       }
       
       temp_segments <- temp %>%
@@ -4841,7 +5074,7 @@ dato_5runs_perf_aggr_all_data <-
       q[[i]] <- 
         ggplot(temp, aes(x = dataset_scenario, y = value)) +
         geom_col(aes(fill = model), width = 0.8, position = position_dodge(0.8)) +
-        labs(title = title_metric, x = title_target) +
+        labs(title = title_metrics, x = title_target) +
         scale_x_discrete(limits = rev, drop = F) +
         coord_flip() +
         geom_point(data = temp_segments,
@@ -4858,7 +5091,7 @@ dato_5runs_perf_aggr_all_data <-
               axis.text.y = title_data_set,
               axis.title.x = element_blank(),
               axis.text.x = element_text(size = 8, vjust = 10),
-              plot.title = title_metric_set,
+              plot.title = title_metrics_set,
               plot.margin = rep(unit(0, "null"), 4),
               panel.margin = unit(0, "null"),
               legend.position = "none") +
@@ -4899,7 +5132,7 @@ if(doouts == 1){
   par(mar = c(0, 0, 0, 0))
   
   ggsave2(
-    filename = paste0("./figures/figure_s15_performances-scenarios.pdf"),
+    filename = paste0("./figures/Supfig_s15_performances-scenarios.pdf"),
     plot = p,
     width = 14, height = 20,
     scale = 2.,
@@ -4913,17 +5146,16 @@ if(doouts == 1){
 }
 
 
-# dishes performances delta (%) over scenarios
-
+### dishes performances delta (%) over scenarios ###
 for(l in levels(dato_5runs_perf_aggr_all_data$nutrient)) {
   
   for (m in levels(dato_5runs_perf_aggr_all_data$dataset)) {
     
     for (r in levels(dato_5runs_perf_aggr_all_data$model)) {
       
-      for (s in levels(dato_5runs_perf_aggr_all_data$metric)) {
+      for (s in levels(dato_5runs_perf_aggr_all_data$metrics)) {
         
-        righe <- (dato_5runs_perf_aggr_all_data$nutrient %in% l) & (dato_5runs_perf_aggr_all_data$dataset %in% m) & (dato_5runs_perf_aggr_all_data$model %in% r) & (dato_5runs_perf_aggr_all_data$metric %in% s)
+        righe <- (dato_5runs_perf_aggr_all_data$nutrient %in% l) & (dato_5runs_perf_aggr_all_data$dataset %in% m) & (dato_5runs_perf_aggr_all_data$model %in% r) & (dato_5runs_perf_aggr_all_data$metrics %in% s)
         righe2 <- righe & dato_5runs_perf_aggr_all_data$scenario %in% levels(dato_5runs_perf_aggr_all_data$scenario)[2]
         
         dato_5runs_perf_aggr_all_data[righe2, "delta"] <-
@@ -4939,11 +5171,10 @@ for(l in levels(dato_5runs_perf_aggr_all_data$nutrient)) {
 }
 
 
-# plotting MAPE for the current publication by frame dataset and filtering scenario
-
+### plotting MAE% for the current publication by frame dataset and filtering scenario ###
 {
   
-  metric_name = "MAPE" # change to plot other metrics
+  metrics_name = "MAE%" # change to plot other metrics
   k <- 0
   p <- list()
   
@@ -4959,12 +5190,12 @@ for(l in levels(dato_5runs_perf_aggr_all_data$nutrient)) {
     
     temp <- 
       dato_5runs_perf_aggr_all_data %>%
-      filter( (dataset == m) & (metric == metric_name) ) %>%
+      filter( (dataset == m) & (metrics == metrics_name) ) %>%
       mutate(nutrient = factor(nutrient, labels = gsub(x = levels(nutrient), pattern = "content", replacement = "\ncontent" )))
     
     p[[k]] <- 
       ggplot(temp, aes(x = model, y = value, fill = model)) +
-      labs(x = "Algorithm", y = metric_name, fill = "Algorithm") +
+      labs(x = "Algorithm", y = metrics_name, fill = "Algorithm") +
       geom_col(position = position_dodge(0.55)) +
       scale_x_discrete(limits = rev, drop = F) +
       coord_flip() +
@@ -4995,7 +5226,7 @@ for(l in levels(dato_5runs_perf_aggr_all_data$nutrient)) {
   title_plot_x <-   
     ggplot() +
     theme_void() +
-    annotate("text", x = 0.5, y = 0.6, label = "MAPE", size = 7, hjust = 0.5, vjust = 0.5)
+    annotate("text", x = 0.5, y = 0.6, label = metrics_name, size = 7, hjust = 0.5, vjust = 0.5)
   
   p <- plot_grid(plotlist = list(p, title_plot_x), nrow = 2, rel_heights = c(1, 0.03))
   
@@ -5011,12 +5242,12 @@ for(l in levels(dato_5runs_perf_aggr_all_data$nutrient)) {
   
   if(doouts == 1){
     
-    cat("printing figure 3 of MAPE percent difference after vs before frame filtering...\n")
+    cat("printing figure 3 of MAE% difference after vs before frame filtering...\n")
     
     par(mar = c(0, 0, 0, 0))
     
     ggsave2(
-      filename = paste0("./figures/figure_3_mape-scenario.pdf"),
+      filename = paste0("./figures/Figure_3_mae-pct_scenario.pdf"),
       plot = p,
       width = 10, height = 6.5,
       scale = 4,
@@ -5032,15 +5263,15 @@ for(l in levels(dato_5runs_perf_aggr_all_data$nutrient)) {
 }
 
 
-# table of MAPE for the current publication by frame dataset and filtering scenario
+### table of MAE% for the current publication by frame dataset and filtering scenario ###
 tabella <-
   dato_5runs_perf_aggr_all_data %>%
-  filter( metric == "MAPE") %>%
+  filter( metrics == "MAE%") %>%
   group_by(dataset, # choose grouping variables
            scenario, 
            #model
   ) %>%
-  summarise(across(c(delta, # choose MAPE [value] or delta MAPE
+  summarise(across(c(delta, # choose MAE% [single value] or delta MAE% [differences]
                      value
   ),
   .names =  "{.col}:{.fn}", 
@@ -5051,23 +5282,25 @@ tabella <-
               Max = ~ max(., na.rm = T),
               Mean = ~ mean(., na.rm = T),
               SD = ~ sd(., na.rm = T)
-  )
+              )
   )
   ) %>% 
   pivot_longer(everything(), names_sep = ':', names_to = c('.value', 'statistics')) %>%
   mutate_if(is.numeric, ~ round(., 2)) %>%
-  regulartable() %>% autofit()
+  flextable %>% autofit
 tabella
 
-tabella_MAPE_scenarios <- tabella
+tabella_MAE_pct_scenarios <- tabella
 
 if(doouts == 9999){
+  
   cat("...printing support table of MAPE and Delta MAPE distribution over scenarios...\n")
-  save_as_docx(tabella_MAPE_scenarios, path = "table_MAPE_scenarios.docx")
+  save_as_docx(tabella_MAE_pct_scenarios, path = "table_MAE-pct_scenarios.docx")
+  
 }
 
 
-###### 5d - MISPREDICTED DISHES analysis between publications and frame filtering scenario ######
+###### 5d - Bland-Altman bias and relative differences by scenario ######
 
 if(doouts == 1){
   
@@ -5075,8 +5308,107 @@ if(doouts == 1){
   dir.create( paste(wd_main, wd_output_data, "mispredictions_dish_ingredient", sep = "/") )
   
   setwd( paste(wd_main, wd_output_data, "mispredictions_dish_ingredient", sep = "/") )
-
+  
 }
+
+### data containing information on bias from each combination of target variable, dataset, algorithm, scenario ###
+ba_bias_all_data <- 
+  ba_bias_all_data %>%
+  bind_rows() %>%
+  mutate(nutrient = factor(nutrient, levels = gsub(x = nutrients_sorted, pattern = "_gt", replacement = ""), labels = paste(nutrients_names_sorted, unit_nutrients_sorted)),
+         scenario = str_extract(string = scenario, pattern = "before|after"),
+         dataset = factor(dataset, levels = datsets_sorted, labels = data_names_sorted)
+         ) %>%
+  pivot_wider(
+    names_from = scenario,
+    values_from = c(contains("bias"), "width_loas"),
+    names_sep = "_"
+  ) %>%
+  mutate(
+    bias_change = case_when(absolute_bias_after < absolute_bias_before ~ "Closer to zero",
+                            absolute_bias_after > absolute_bias_before ~ "Farther from zero",
+                            TRUE ~ "Unchanged"
+                            ),
+    improved = bias_change == "Closer to zero"
+  )
+
+
+### summary statistics: overall, by algorithm, by dataset ###
+ba_bias_overall <- 
+  ba_bias_all_data %>%
+  summarise(across(contains(c("bias","width")) & where(is.numeric), ~ median(.)),
+            improved_combinations = sum(improved),
+            total_combinations = n(),
+            improved_percentage = 100 * improved_combinations / total_combinations
+            )
+
+ba_bias_nutrient <- 
+  ba_bias_all_data %>%
+  group_by(nutrient) %>%
+  summarise(across(contains(c("bias","width")) & where(is.numeric), ~ median(.)),
+            improved_combinations = sum(improved),
+            total_combinations = n(),
+            improved_percentage = 100 * improved_combinations / total_combinations
+  )
+
+ba_bias_algorithm <- 
+  ba_bias_all_data %>%
+  group_by(algorithm) %>%
+  summarise(across(contains("bias") & where(is.numeric), ~ median(.)),
+            improved_combinations = sum(improved),
+            total_combinations = n(),
+            improved_percentage = 100 * improved_combinations / total_combinations
+            )
+
+ba_bias_dataset <- 
+  ba_bias_all_data %>%
+  group_by(dataset) %>%
+  summarise(across(contains("bias") & where(is.numeric), ~ median(.)),
+            improved_combinations = sum(improved),
+            total_combinations = n(),
+            improved_percentage = 100 * improved_combinations / total_combinations
+            )
+
+
+ba_bias_all_data %>%
+  group_by(algorithm, nutrient) %>%
+  summarise_at(.vars = "width_loas_after", 
+               .funs = list(me =~ median(.),
+                            q1 =~ quantile(., 0.25),
+                            q3 =~ quantile(., 0.75)
+               ))
+
+
+ba_bias_all_data %>%
+  count(bias_change) %>%
+  mutate(percentage = 100 * n / sum(n))
+
+ba_bias_summary <- 
+  bind_rows(ba_bias_all_data %>%
+              mutate(nutrient = factor(nutrient, labels = gsub(x = nutrients_sorted, pattern = "_gt", replacement = "")),
+                     dataset = substr(x = dataset, start = 1, stop = 2),
+                     algorithm = substr(x  = algorithm, start = 1, stop = 3)) %>%
+              rowwise %>%
+              mutate(level = paste(nutrient, dataset, algorithm),
+                     category = "Point estimate"
+                     ) %>% select(!c(nutrient, dataset, algorithm)),
+            ba_bias_overall %>% mutate(level = "Overall", category = "Overall"),
+            ba_bias_algorithm %>% mutate(level = "Algorithm", category = algorithm) %>% select(-algorithm),
+            ba_bias_dataset %>% mutate(level = "Dataset", category = dataset) %>% select(-dataset)
+            ) %>%
+  mutate(across(where(is.numeric), ~ round(.x, digits = 1)))
+
+tabella_ba_bias <- ba_bias_summary %>% flextable %>% autofit
+
+if(doouts == 1){
+  
+  cat("...printing table of Bland-Altman bias summary results...\n")
+  save_as_docx( x = tabella_ba_bias, path = "./tables/Support-table_ba_bias.docx" )
+  
+}
+
+
+###### 5e - MISPREDICTED DISHES analysis between publications and frame filtering scenario ######
 
 mispred_reportino3_list <-
   bind_rows(mispred_reportino3_list) %>%
@@ -5091,7 +5423,7 @@ list_rep3_before <- unique(mispred_reportino3_list[mispred_reportino3_list$scena
 list_rep3_after <- unique(mispred_reportino3_list[mispred_reportino3_list$scenario == "After frame filtering", "recipe_id"])
 
 '
-# you will find these dishes
+### you will find these dishes: ###
 list_rep3_before <- c(
   "dish_1550873668", "dish_1557937079", "dish_1558372948", "dish_1558373159", "dish_1558375667", "dish_1558375886", "dish_1558376984", "dish_1558544663",
   "dish_1558549806", "dish_1558630325", "dish_1558720236", "dish_1560367952", "dish_1560367980", "dish_1560368506", "dish_1560368570", "dish_1560800988", 
@@ -5131,37 +5463,38 @@ list_rep3_after <- c(
 
 '
 
-# R3before intersected intersection R3after (including problematic dishes in Bianco 2025)
+### R3before intersected intersection R3after (including problematic dishes in Bianco 2025)
 intersection_before_after <- 
   intersect(x = list_rep3_after, y = list_rep3_before)
 
-# R3before intersected with R3after (excluding problematic dishes in Bianco 2025)
+### R3before intersected with R3after (excluding problematic dishes in Bianco 2025) ###
 intersection_before_after_noprobl <- 
   intersect(x = unique(mispred_reportino3_list[(mispred_reportino3_list$scenario == "Before frame filtering") & (mispred_reportino3_list$problematic_dish == 1), "recipe_id"]),
             y = unique(mispred_reportino3_list[(mispred_reportino3_list$scenario == "After frame filtering") & (mispred_reportino3_list$problematic_dish == 1), "recipe_id"]))
 
-# realigned dishes in R3 after, e.g. R3before \ intersection(R3before, R3after)
+### realigned dishes in R3 after, e.g. R3before \ intersection(R3before, R3after) ###
 realligned_after <- 
   unique(mispred_reportino3_list[(mispred_reportino3_list$scenario == "Before frame filtering") & !(mispred_reportino3_list$recipe_id %in% intersection_before_after), "recipe_id"])
 
-# new entries dishes in R3 after, e.g. R3after \ intersection(R3before, R3after)
+### new entries dishes in R3 after, e.g. R3after \ intersection(R3before, R3after) ###
 new_entries_after <- 
   unique(mispred_reportino3_list[(mispred_reportino3_list$scenario == "After frame filtering") & !(mispred_reportino3_list$recipe_id %in% intersection_before_after), "recipe_id"])
 
-# R3before intersected with R2before rerun:
+### R3before intersected with R2before rerun: ###
 rep3_rep2_rerun_before <- 
   intersect(x = list_rep3_before, y = list_rep2_before_rerun)
 
-# R3after \ R2before_rerun # 5 dishes
+### R3after \ R2before_rerun # 5 dishes ###
 rep3_after_no_rep2_rerun_before <- list_rep3_after[(! (list_rep3_after %in% mispred_reportino2$recipe_id)) & (! list_rep3_after %in% intersection_before_after_noprobl)]
 
-# R3before \ R2before_rerun # 8 dishes
+### R3before \ R2before_rerun # 8 dishes ###
 rep3_no_rep2_rerun_before <- list_rep3_before[! (list_rep3_before %in% list_rep2_before_rerun) ]
 
-# R2before_rerun \ R3before # 6 sishes
+### R2before_rerun \ R3before # 6 dishes ###
 rep2_rerun_no_rep3_before <- list_rep2_before_rerun[! (list_rep2_before_rerun %in% list_rep3_before) ]
 
-## you will find these dishes
+
+### you will find these dishes ###
 '
 rep3_after_no_rep2_rerun_before <- # 5 dishes in mispred rep3_after & not rep2_before
 c("dish_1563551194", "dish_1563898084", "dish_1566316757", 
@@ -5180,10 +5513,11 @@ rep3_no_rep2_rerun_before <-  # 8 dishes in mispred. rep3_before & not rep2_befo
   
 '
 
-# detect the statistics of ingredients within some dishes of interest
+
+### detect the statistics of ingredients within some dishes of interest  ###
 target_dishes = rep3_after_no_rep2_rerun_before
 
-# creating list of dishes of interest to count detected ingredient and their relevation over algotirhms, across datasets
+### creating list of dishes of interest to count detected ingredient and their relevation over algotirhms, across datasets  ###
 target_dishes_nutr <-
   conf_matrix_list[
     !(conf_matrix_list[, target_dishes] %in% c("TN")),] %>%
@@ -5206,7 +5540,7 @@ target_dishes_nutr <-
   arrange(recipe_id, value)
 
 
-# print observed and predicted values over reportinos  
+### print observed and predicted values over reportinos ###
 target_list_name <- "5_dishes"
 target_dishes <- rep3_after_no_rep2_rerun_before
 
@@ -5251,12 +5585,14 @@ target_dishes_nutr_ingr <-
 
 
 if(doouts == 1){
+  
   cat("...printing data for table S9 of 5 dishes - new mispredicted after frame filtering in the current analysis - ...\n")
-  write.xlsx(x = target_dishes_nutr_ingr, file = paste0("./tables/table_s9_mispred-dishes_5_after_vs_R2_no-rerun.xlsx"))
+  write.xlsx(x = target_dishes_nutr_ingr, file = paste0("./tables/Table_s9_mispred-dishes_5_after_vs_R2_no-rerun.xlsx"))
+  
 }
 
 
-# print observed and predicted values over reportinos  
+### print observed and predicted values over reportinos ###
 target_list_name <- "6_and_8_dishes"
 target_dishes_6 <- rep2_rerun_no_rep3_before
 target_dishes_8 <- rep3_no_rep2_rerun_before
@@ -5347,13 +5683,15 @@ target_dishes_nutr_ingr <-
 
 
 if(doouts == 1){
+  
   cat("printing data for tables S11 of 6 dishes - mispredicted in the rerun of Bianco et al. 2025 and not in this analysis before frame filtering - ...\n")
   cat("printing data for tables S12 of 8 dishes - mispredicted in this analysis before frame filtering and not in the rerun of Bianco et al. 2025 and not  - ...\n")
-  write.xlsx(x = target_dishes_nutr_ingr, file = paste0("./tables/table_s11-s12_mispred-dishes_6-8_rerun_R2.xlsx"))
+  write.xlsx(x = target_dishes_nutr_ingr, file = paste0("./tables/Tables_s11-s12_mispred-dishes_6-8_rerun_R2.xlsx"))
+  
 }
 
 
-# support material: stastistics on target dishes
+### support material: stastistics on target dishes ###
 temp <-
   conf_matrix_list[
     !(conf_matrix_list[, target_dishes] %in% c("TN")),] %>%
@@ -5395,35 +5733,40 @@ tabella <-
                                          Max = ~ max(., na.rm = T),
                                          Mean = ~ mean(., na.rm = T),
                                          SD = ~ sd(., na.rm = T)
-  )
+                                         )
   ) %>%
-  regulartable() %>% autofit()
+  flextable %>% autofit
 tabella
 
 tabella_focus_target_dishes <- tabella
 
 
 if(doouts == 9999){
+  
   cat("...printing support table of nutritional profile of a subset of dishes of interest...\n")
-  save_as_docx(x = tabella_focus_target_dishes, path = paste0( "./tables/", paste0(x = target_list_name, "_nutr_profile_before_reportino2_reportino3.docx") ) )
+  save_as_docx(x = tabella_focus_target_dishes, path = paste0( "./tables/Support-Table_", paste0(x = target_list_name, "_nutr_profile_before_reportino2_reportino3.docx") ) )
+  
 }
 
 
 #### 6 - AUTOMATED FRAME FILTERING ####
+
 if(doouts == 1){
+  
   setwd(dir = paste(wd_main, wd_output_data, sep = "/") )
   dir.create( paste(wd_main, wd_output_data, "left_removed_frames", sep = "/") )
   
   setwd( paste(wd_main, wd_output_data, "left_removed_frames", sep = "/") )
+  
 }
 
 
-## coding of frames: ##
+### coding of frames: ###
 # the matrix has 5006 rows (the number of dishes in B24 dataset) and 8880 columns (= 2 + 8878, which is the larger number of available records. 8846 is the larger number of resampled frames data)
 
-# -1 = no n-th frame
-#  0 = descarted 
-#  1 = kept
+# -1 = no frames in the single video
+#  0 = descarted from the sampling action
+#  1 = kept in the sampling action
 
 ### ### ### ### ### ###
 
@@ -5475,7 +5818,7 @@ tabella <-
             ) %>% 
   pivot_longer(everything(), names_sep = ':', names_to = c('.value', 'statistics')) %>%
   mutate_if(is.numeric, ~ round(., 2)) %>%
-  regulartable() %>% autofit()
+  flextable %>% autofit
 tabella
 
 table_frames <- tabella
@@ -5486,12 +5829,14 @@ dato_aff_long %>%
   group_by(set) %>%
   summarise_at(vars(ghost_frames:kept_frames), .funs = list(n = sum))
 
-# support table for a subset of dishes
+
+### support table for a subset of dishes ###
 target_dishes <- c("dish_1558630325", "dish_1558720236", "dish_1562703447", "dish_1563389626", "dish_1566838351",
                    "dish_1563551194", "dish_1566316757", "dish_1566849987", "dish_1568146942", "dish_1563898084",
                    "dish_1563898084", "dish_1563551194")
 
-# focus on target dishes
+
+### focus on a subset of dishes - target dishes - ###
 dato_aff_target_dishes <- 
   dato_aff %>% select( !x1 ) %>%
   filter( recipe_id %in% target_dishes) %>%
@@ -5514,15 +5859,17 @@ dato_aff_target_dishes <-
   ungroup()
 
 if(doouts == 9999){
+  
   cat("printing support data for statistics on frames of a subset of dishes...\n")
   write.xlsx(x = merge(x = dato_aff_long[dato_aff_long$recipe_id %in% target_dishes, -c(2, 8)],
                        y = mispred_reportino3_list[(mispred_reportino3_list$scenario == "Before frame filtering") & (mispred_reportino3_list$recipe_id %in% target_dishes), 1:4], by = "recipe_id"),
              file = "./focus_on_target_dishes.xlsx",
              sheetName = "target_dishes"
              )
+  
 }
 
-#test: error in dishs (should be null)
+### test: error in dishs (should be null) ###
 dato_aff_long[dato_aff_long$total_frames != dato_aff_long$excluded_frames + dato_aff_long$kept_frames,]
 
 
@@ -5557,11 +5904,9 @@ tabella_frames_excl_kept <- tabella
 
 
 if(doouts == 1){
-  cat("...printing table 2 of frame numbers...\n")
-  save_as_docx(table_frames, path = "./table_2_frames.docx")
-  #save_as_docx(tabella_frames_excl_kept, path = "./table_excl_kept_frames.docx")
   
-}
-
-
-## END OF CODE
+  cat("...printing table 2 of frame numbers...\n")
+  save_as_docx(table_frames, path = "./Table_2_frames.docx")
+  #save_as_docx(tabella_frames_excl_kept, path = "./Table_excl_kept_frames.docx")
+  
+} ## END OF CODE ##
